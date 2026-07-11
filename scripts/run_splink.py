@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pandas as pd
 import splink.comparison_library as cl
-
 from splink import DuckDBAPI, Linker, SettingsCreator, block_on
+
 from zentinull.logging_config import get_logger, setup
 
 ROOT = Path(__file__).resolve().parent.parent

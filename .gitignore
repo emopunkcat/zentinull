@@ -17,6 +17,7 @@ venv/
 .vscode/
 *.swp
 *.swo
+*.omo
 
 # Generated data
 data/*.sqlite
@@ -25,6 +26,8 @@ data/*.sqlite-shm
 data/*.duckdb
 export/csv/
 export/splink_output/
+data/*.log
+data/status.json
 
 # Local config
 .env
