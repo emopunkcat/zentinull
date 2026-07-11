@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zentinull"
+dynamic = ["version"]
+description = "Device entity resolution pipeline — ingest → Splink → DuckDB mesh → FastAPI"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "UNLICENSED" }
+authors = [{ name = "Moonlite IT" }]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "duckdb>=1.2.0",
+    "pydantic>=2.10.0",
+    "httpx>=0.28.0",
+    "requests>=2.32.0",
+    "splink>=4.0.0",
+    "pandas>=2.2.0",
+    "ldap3>=2.9.0",
+    "python-multipart>=0.0.18",
+]
+
+[project.urls]
+Homepage = "https://github.com/moonlite/zentinull"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.25.0",
+    "httpx>=0.28.0",
+    "ruff>=0.9.0",
+    "mypy>=1.15.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["zentinull*"]
+
+[tool.setuptools.package-data]
+"zentinull" = ["py.typed"]
+
+# ── Ruff ──────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "ARG", "RUF100"]
+ignore = [
+    "E501",       # line-length — handled by line-length above
+    "B028",       # no explicit stacklevel — intentional in hot-path logs
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG"]  # test fixtures often have unused params
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# ── Mypy ──────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "ldap3.*",
+    "splink.*",
+    "duckdb.*",
+]
+ignore_missing_imports = true
+
+# ── Pytest ────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+# ── Coverage ──────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["zentinull"]
+omit = ["*/tests/*", "*/__pycache__/*"]

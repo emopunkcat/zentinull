@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Generated data
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/*.duckdb
+export/csv/
+export/splink_output/
+
+# Local config
+.env
+*.pem
+*.p7m
+
+# OS
+.DS_Store
+Thumbs.db
