@@ -58,6 +58,10 @@ def run_streaming(
       * printed to ``sys.stderr`` as ``[tag] <line>`` for terminal visibility,
       * appended to ``data/pipeline.log`` (rotated at 10 MiB, 5 backups).
 
+    The timeout is enforced during output reading — if the subprocess produces no
+    output or runs longer than *timeout* seconds, it is killed and ``RuntimeError``
+    is raised.
+
     Args:
         cmd: The command to execute, as a list of strings (e.g. ``["python", "script.py"]``).
         tag: Short source label used to prefix every output line (e.g. ``"ingest"``).
@@ -70,8 +74,10 @@ def run_streaming(
         of strings (trailing newlines stripped).
 
     Raises:
-        RuntimeError: If the process exits with a non-zero return code.
+        RuntimeError: If the process exits with a non-zero return code or times out.
     """
+    import threading as _threading
+
     pipeline_log = _get_pipeline_log()
     output_lines: list[str] = []
     cwd_str = str(cwd) if cwd else None
@@ -93,24 +99,33 @@ def run_streaming(
         env=popen_env,
     )
 
-    try:
-        assert process.stdout is not None
-        for raw_line in process.stdout:
+    assert process.stdout is not None
+
+    def _read_output() -> None:
+        """Read subprocess output line by line in a background thread."""
+        out = process.stdout
+        assert out is not None
+        for raw_line in out:
             line = raw_line.rstrip("\n\r")
             tagged = f"[{tag}] {line}"
             print(tagged, file=sys.stderr, flush=True)
             pipeline_log.info(tagged)
             output_lines.append(line)
 
-        try:
-            returncode = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            msg = f"[{tag}] timed out after {timeout}s"
-            print(msg, file=sys.stderr, flush=True)
-            pipeline_log.info(msg)
-            raise RuntimeError(msg) from None
+    try:
+        reader = _threading.Thread(target=_read_output, daemon=True)
+        reader.start()
+
+        returncode = process.wait(timeout=timeout)
+        reader.join()
+
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        msg = f"[{tag}] timed out after {timeout}s"
+        print(msg, file=sys.stderr, flush=True)
+        pipeline_log.info(msg)
+        raise RuntimeError(msg) from None
 
     except BaseException:
         process.kill()

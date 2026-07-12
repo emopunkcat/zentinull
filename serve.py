@@ -71,6 +71,7 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         skip_ingest=args.skip_ingest,
         sources=sources,
         skip_sources=skip_sources,
+        remote_host=args.remote,
     )
 
 
@@ -87,7 +88,12 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     if args.skip:
         skip_sources = [s.strip() for s in args.skip.split(",")]
 
-    results = run_ingest(sources=sources, skip_sources=skip_sources)
+    if args.remote:
+        from zentinull.cli.pipeline import run_remote_ingest
+
+        results = run_remote_ingest(host=args.remote, sources=sources, skip_sources=skip_sources)
+    else:
+        results = run_ingest(sources=sources, skip_sources=skip_sources)
     total = sum(v for v in results.values() if v >= 0)
     failed = [k for k, v in results.items() if v < 0]
     print(f"\nIngest complete: {total} records from {len(results) - len(failed)} sources")
@@ -124,6 +130,41 @@ def cmd_load(args: argparse.Namespace) -> None:  # noqa: ARG001
 
     device_count = run_load()
     print(f"Load complete: {device_count} devices in data/mesh.duckdb")
+
+
+# ── Seed ──────────────────────────────────────────────────────────────────────
+
+
+def cmd_seed(args: argparse.Namespace) -> None:
+    """Seed demo data into mesh database."""
+    from scripts.seed_demo_data import seed_demo_data
+
+    count = seed_demo_data(row_count=args.rows, force=args.force)
+    print(f"Seeded {count} source records into data/mesh.duckdb")
+
+
+# ── Benchmark ─────────────────────────────────────────────────────────────────
+
+
+def cmd_bench(args: argparse.Namespace) -> None:  # noqa: ARG001
+    """Run test suite benchmarks with historical tracking."""
+    from scripts.bench import main as bench_main
+
+    sys.exit(bench_main())
+
+
+def cmd_bench_api(args: argparse.Namespace) -> None:
+    """Run API endpoint benchmarks."""
+    from scripts.bench_api import main as bench_api_main
+
+    sys.exit(bench_api_main(["--ci"] if args.ci else None))
+
+
+def cmd_remote(args: argparse.Namespace) -> None:  # noqa: ARG001
+    """Start the remote ingest proxy daemon."""
+    from zentinull.cli.remote import main as proxy_main
+
+    proxy_main()
 
 
 # ── Status ─────────────────────────────────────────────────────────────────────
@@ -203,6 +244,9 @@ Examples:
   python serve.py ingest --source fg
   python serve.py ingest --skip ad,sdp
   python serve.py splink --threshold -5
+  python serve.py seed --rows 200 -f
+  python serve.py bench
+  python serve.py bench-api
   python serve.py backup --output /backups/2026-07-11/
   python serve.py logs --follow
   python serve.py db list
@@ -217,18 +261,42 @@ Examples:
     p_start.add_argument("--log-json", action="store_true", help="JSON log output")
     p_start.set_defaults(func=cmd_start)
 
+    # ── seed ──
+    p_seed = sub.add_parser("seed", help="Seed demo data into mesh database")
+    p_seed.add_argument("--rows", type=int, default=80, help="Number of devices to generate (default: 80)")
+    p_seed.add_argument("--force", "-f", action="store_true", help="Overwrite existing mesh.duckdb")
+    p_seed.set_defaults(func=cmd_seed)
+
+    # ── bench ──
+    p_bench = sub.add_parser("bench", help="Run test suite benchmarks with historical tracking")
+    p_bench.set_defaults(func=cmd_bench)
+
+    # ── bench-api ──
+    p_bench_api = sub.add_parser("bench-api", help="Run API endpoint performance benchmarks")
+    p_bench_api.add_argument("--ci", action="store_true", help="CI mode: strict regression check (25%% threshold)")
+    p_bench_api.set_defaults(func=cmd_bench_api)
+
+    # ── remote ──
+    p_remote = sub.add_parser("remote", help="Start remote ingest proxy daemon (on network-connected machine)")
+    p_remote.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    p_remote.add_argument("--port", type=int, default=9999, help="Port (default: 9999)")
+    p_remote.add_argument("--reload", action="store_true", help="Enable auto-reload")
+    p_remote.set_defaults(func=cmd_remote)
+
     # ── pipeline ──
     p_pipe = sub.add_parser("pipeline", help="Run full pipeline: ingest → export → splink → load")
     p_pipe.add_argument("--skip-ingest", action="store_true", help="Skip ingest stage")
     p_pipe.add_argument("--source", type=str, help="Comma-separated source keys: sp,me,fg,zbx,ad,sdp")
     p_pipe.add_argument("--skip", type=str, help="Comma-separated sources to skip")
     p_pipe.set_defaults(func=cmd_pipeline)
+    p_pipe.add_argument("--remote", type=str, help="Tailscale IP of remote proxy for ingest forwarding")
 
     # ── ingest ──
     p_ingest = sub.add_parser("ingest", help="Run data ingestors")
     p_ingest.add_argument("--source", type=str, help="Comma-separated source keys: sp,me,fg,zbx,ad,sdp")
     p_ingest.add_argument("--skip", type=str, help="Comma-separated sources to skip")
     p_ingest.set_defaults(func=cmd_ingest)
+    p_ingest.add_argument("--remote", type=str, help="Tailscale IP of remote proxy for ingest forwarding")
 
     # ── splink ──
     p_splink = sub.add_parser("splink", help="Run Splink entity resolution")

@@ -1,8 +1,8 @@
-# mypy: ignore-errors
-
 """FastAPI router — async endpoints backed by DuckDB MeshDB."""
 
 from __future__ import annotations
+
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -14,8 +14,14 @@ log = get_logger("api.router")
 router = APIRouter()
 
 
+@router.get("/health")
+async def health() -> dict[str, str]:
+    """Health check — always returns 200 with status."""
+    return {"status": "ok"}
+
+
 def _db(request: Request) -> MeshDB:
-    db = request.app.state.db
+    db: MeshDB | None = cast("MeshDB | None", request.app.state.db)
     if db is None:
         raise HTTPException(503, "Mesh database not loaded — run pipeline.py first")
     return db
@@ -27,7 +33,7 @@ def _db(request: Request) -> MeshDB:
 
 
 @router.get("/device/{query}")
-async def device(query: str, request: Request) -> dict:
+async def device(query: str, request: Request) -> dict[str, Any]:
     """
     Device lookup by any identifier — name, serial, MAC, IP, user.
     Falls back to full-text substring search.
@@ -41,7 +47,7 @@ async def device(query: str, request: Request) -> dict:
 
 
 @router.post("/batch")
-async def batch(request: Request) -> list[dict | None]:
+async def batch(request: Request) -> list[dict[str, Any] | None]:
     """
     Resolve multiple device queries in a single connection.
     POST /batch  body: ["ws28", "dc01", "MZ015CF2", "192.168.20.35"]
@@ -69,7 +75,7 @@ async def search(
     q: str = Query(..., min_length=1),
     field: str = "",
     limit: int = Query(20, le=100),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """
     Search by any field or full-text across all columns.
 
@@ -88,14 +94,14 @@ async def search(
 
 
 @router.get("/dashboard")
-async def dashboard(request: Request) -> dict:
+async def dashboard(request: Request) -> dict[str, Any]:
     """KPI dashboard — counts, coverage, top clusters."""
     log.info({"event": "request", "endpoint": "/dashboard"})
     return _db(request).dashboard()
 
 
 @router.get("/mesh")
-async def mesh(request: Request) -> dict:
+async def mesh(request: Request) -> dict[str, Any]:
     """Cross-source cluster statistics."""
     log.info({"event": "request", "endpoint": "/mesh"})
     return _db(request).mesh_stats()
@@ -108,7 +114,7 @@ async def list_clusters(
     source: str = "",
     limit: int = Query(50, le=200),
     offset: int = 0,
-) -> dict:
+) -> dict[str, Any]:
     """Paginated cluster list, filterable by source count or system."""
     log.info({"event": "request", "endpoint": "/clusters", "min_sources": min_sources, "source": source})
     db = _db(request)
@@ -117,7 +123,7 @@ async def list_clusters(
 
 
 @router.get("/anomalies")
-async def anomalies(request: Request) -> dict:
+async def anomalies(request: Request) -> dict[str, Any]:
     """Singletons, unnamed devices, missing serials."""
     log.info({"event": "request", "endpoint": "/anomalies"})
     return _db(request).anomalies()
@@ -136,7 +142,7 @@ async def device_metrics(
     source: str = "",
     hours: int = 24,
     limit: int = Query(500, le=5000),
-) -> dict:
+) -> dict[str, Any]:
     """
     Time-series metrics for a device.
     /device/ws28/metrics                          → all metrics last 24h
@@ -163,7 +169,7 @@ async def device_timeline(
     request: Request,
     hours: int = 168,
     limit: int = Query(100, le=1000),
-) -> dict:
+) -> dict[str, Any]:
     """
     Recent events for a device.
     /device/ws28/timeline          → last 7 days
@@ -183,7 +189,7 @@ async def device_timeline(
 
 
 @router.get("/device/{query}/stats")
-async def device_stats(query: str, request: Request) -> dict:
+async def device_stats(query: str, request: Request) -> dict[str, Any]:
     """
     Current state: latest metric values + event severity counts.
     /device/ws28/stats
@@ -206,7 +212,7 @@ async def device_metric_summary(
     query: str,
     request: Request,
     hours: int = 24,
-) -> dict:
+) -> dict[str, Any]:
     """
     Aggregated metrics: avg/max/min/latest per metric.
     /device/ws28/metric-summary?hours=168
@@ -222,7 +228,7 @@ async def device_metric_summary(
     }
 
 
-def _resolve_cluster(db, query: str) -> str:
+def _resolve_cluster(db: MeshDB, query: str) -> str:
     """Resolve a query string to a cluster_id, or 404."""
     result = db.lookup(query)
     if result is None:

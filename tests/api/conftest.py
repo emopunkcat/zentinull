@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from zentinull.api.db import MeshDB
+from zentinull.api.schema import EVENTS_SQL, INDEXES_SQL, METRICS_SQL
 from zentinull.api.server import app
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -189,20 +190,8 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             row,
         )
-
     # ── metrics ────────────────────────────────────────────────────────────
-    conn.execute("""
-        CREATE TABLE metrics (
-            cluster_id TEXT NOT NULL,
-            source TEXT NOT NULL,
-            metric_name TEXT NOT NULL,
-            value DOUBLE,
-            text_value TEXT,
-            tags TEXT[] DEFAULT [],
-            recorded_at TIMESTAMP NOT NULL,
-            ingested_at TIMESTAMP DEFAULT now()
-        )
-    """)
+    conn.execute(METRICS_SQL)
 
     metrics_data = [
         ("c1", "zbx", "cpu_pct", 45.2, None, [], now, now),
@@ -219,19 +208,8 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
         )
 
     # ── events ─────────────────────────────────────────────────────────────
-    conn.execute("""
-        CREATE TABLE events (
-            cluster_id TEXT NOT NULL,
-            source TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            detail TEXT DEFAULT '',
-            severity TEXT DEFAULT 'info',
-            recorded_at TIMESTAMP NOT NULL,
-            ingested_at TIMESTAMP DEFAULT now()
-        )
-    """)
-
-    events_data = [
+    conn.execute(EVENTS_SQL)
+    events_data: list[tuple] = [
         ("c1", "zbx", "alert", "CPU usage above threshold", "info", now, now),
         ("c1", "me", "warning", "Disk space low", "warning", now, now),
         ("c2", "zbx", "alert", "Host unreachable", "critical", now, now),
@@ -244,13 +222,7 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
         )
 
     # ── indexes ────────────────────────────────────────────────────────────
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(device_name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_serial ON devices(serial_number)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_records_cluster ON source_records(cluster_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_records_mac ON source_records(mac_clean)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_cluster_time ON metrics(cluster_id, recorded_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(metric_name, recorded_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_cluster_time ON events(cluster_id, recorded_at)")
+    conn.execute(INDEXES_SQL)
 
     conn.execute("CHECKPOINT")
     conn.close()
@@ -273,4 +245,11 @@ def mock_meshdb() -> MagicMock:
 def client_with_db(mock_meshdb: MagicMock) -> TestClient:
     """FastAPI TestClient wired with mock_meshdb as app.state.db."""
     app.state.db = mock_meshdb
+    return TestClient(app)
+
+
+@pytest.fixture
+def client() -> TestClient:
+    """FastAPI TestClient with app.state.db = None (503 path)."""
+    app.state.db = None
     return TestClient(app)

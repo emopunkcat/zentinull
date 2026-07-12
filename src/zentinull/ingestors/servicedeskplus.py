@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import requests
 
@@ -99,6 +100,21 @@ def _extract(obj: dict, field: str) -> str:  # type: ignore[type-arg]
     return str(v) if v is not None else ""
 
 
+def _transform_tabular(items: list[dict[str, Any]], cols: list[str]) -> list[dict[str, Any]]:
+    """Transform raw SDP data into cleaned records using _extract for each column.
+
+    Returns list of records. Pure function — no I/O.
+    """
+    records = []
+    for item in items:
+        rec = {}
+        for col in cols:
+            rec[col] = _extract(item, col)
+        rec["raw_json"] = json.dumps(item)
+        records.append(rec)
+    return records
+
+
 def ingest() -> int:
     conn = db("sdp")
     total = 0
@@ -119,13 +135,7 @@ def ingest() -> int:
         if not items:
             log.info({"event": "empty", "source": "sdp", "table": tname})
             continue
-        records = []
-        for item in items:
-            rec = {}
-            for col in tdef["cols"]:
-                rec[col] = _extract(item, col)
-            rec["raw_json"] = json.dumps(item)
-            records.append(rec)
+        records = _transform_tabular(items, tdef["cols"])  # type: ignore[arg-type]
         create_table(conn, tname, tdef["cols"])  # type: ignore[arg-type]
         n = insert_raw(conn, tname, records)
         log.info({"event": "inserted", "source": "sdp", "table": tname, "rows": n})

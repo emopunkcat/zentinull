@@ -14,6 +14,7 @@ from typing import Any
 
 import duckdb
 
+from ..api.schema import DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL, SOURCE_RECORDS_SQL
 from ..export_for_splink import export as _run_export_fn
 from ..logging_config import StepTimer, get_logger
 from .status import record_done, record_fail, record_start
@@ -75,6 +76,63 @@ def run_ingest(sources: list[str] | None = None, skip_sources: list[str] | None 
                 log.info({"event": "ingested", "source": display_name, "rows": n})
             except Exception as e:
                 log.error({"event": "ingest_failed", "source": display_name, "error": str(e)})
+                results[display_name] = -1
+
+    succeeded = sum(1 for v in results.values() if v >= 0)
+    record_done("ingest", total=len(results), succeeded=succeeded)
+    return results
+
+
+_REMOTE_PORT = 9999
+
+
+def run_remote_ingest(
+    host: str,
+    port: int = _REMOTE_PORT,
+    sources: list[str] | None = None,
+    skip_sources: list[str] | None = None,
+) -> dict[str, int]:
+    """Trigger ingest on a remote proxy and download the SQLite databases.
+
+    Contacts the remote daemon at host:port, triggers ingest for the requested
+    sources (or all 6), downloads each resulting .sqlite file into the local
+    data/ directory, then returns the {source_name: row_count} results.
+    """
+    import httpx
+
+    base = f"http://{host}:{port}"
+    results: dict[str, int] = {}
+    record_start("ingest")
+    source_keys = list(SOURCE_MAP.keys())
+
+    if sources is not None:
+        source_keys = [k for k in source_keys if k in sources]
+    skip_set = set(skip_sources or [])
+    source_keys = [k for k in source_keys if k not in skip_set]
+
+    with StepTimer(log, "ingest"):
+        for key in source_keys:
+            _, display_name = SOURCE_MAP[key]
+            log.info({"event": "remote_ingesting", "source": display_name, "host": host})
+            try:
+                resp = httpx.post(f"{base}/ingest/{key}", timeout=600)
+                resp.raise_for_status()
+                body = resp.json()
+                rows = body.get("rows", -1)
+                results[display_name] = rows
+                log.info({"event": "remote_ingested", "source": display_name, "rows": rows})
+
+                # Download the SQLite file
+                db_resp = httpx.get(f"{base}/data/{key}.sqlite", timeout=120)
+                db_resp.raise_for_status()
+                db_path = ROOT / "data" / f"{key}.sqlite"
+                db_path.write_bytes(db_resp.content)
+                log.info({"event": "db_downloaded", "source": key, "path": str(db_path), "bytes": len(db_resp.content)})
+            except httpx.HTTPStatusError as e:
+                log.error({"event": "remote_ingest_failed", "source": display_name, "error": str(e)})
+                results[display_name] = -1
+            except httpx.RequestError as e:
+                log.error({"event": "remote_unreachable", "source": display_name, "error": str(e)})
                 results[display_name] = -1
 
     succeeded = sum(1 for v in results.values() if v >= 0)
@@ -163,65 +221,17 @@ def run_load() -> int:
 
         try:
             # Load clusters CSV into source_records table
-            conn.execute(
-                """
-                CREATE OR REPLACE TABLE source_records AS
-                SELECT * FROM read_csv_auto(?)
-                """,
-                [str(csv_path)],
-            )
+            conn.execute(SOURCE_RECORDS_SQL, [str(csv_path)])
 
             # Build devices table: one row per cluster, consolidated
-            conn.execute("""
-                CREATE OR REPLACE TABLE devices AS
-                SELECT
-                    cluster_id,
-                    COALESCE(
-                        NULLIF(MIN(CASE WHEN name_clean != '' THEN name_clean END), ''),
-                        NULLIF(MIN(CASE WHEN name != '' THEN name END), ''),
-                        '(unnamed)'
-                    ) AS device_name,
-                    COUNT(DISTINCT source) AS source_count,
-                    LIST(DISTINCT source ORDER BY source) AS sources,
-                    COALESCE(NULLIF(MIN(CASE WHEN serial_number != '' THEN serial_number END), ''), '') AS serial_number,
-                    COALESCE(NULLIF(MIN(CASE WHEN mac_clean != '' THEN mac_clean END), ''), '') AS mac_address,
-                    COALESCE(NULLIF(MIN(CASE WHEN manufacturer != '' THEN manufacturer END), ''), '') AS manufacturer,
-                    COALESCE(NULLIF(MIN(CASE WHEN model != '' THEN model END), ''), '') AS model,
-                    COALESCE(NULLIF(MIN(CASE WHEN os != '' THEN os END), ''), '') AS os,
-                    COALESCE(NULLIF(MIN(CASE WHEN assigned_user != '' THEN assigned_user END), ''), '') AS assigned_user,
-                    COALESCE(NULLIF(MIN(CASE WHEN ip_address != '' THEN ip_address END), ''), '') AS ip_address,
-                    COALESCE(NULLIF(MIN(CASE WHEN imei != '' THEN imei END), ''), '') AS imei,
-                    COUNT(*) AS record_count
-                FROM source_records
-                GROUP BY cluster_id
-            """)
-
-            # Indexes
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(device_name)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_serial ON devices(serial_number)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_records_cluster ON source_records(cluster_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_records_mac ON source_records(mac_clean)")
+            conn.execute(DEVICES_SQL)
 
             # Metrics & Events (append-only)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS metrics (
-                    cluster_id TEXT NOT NULL, source TEXT NOT NULL,
-                    metric_name TEXT NOT NULL, value DOUBLE, text_value TEXT,
-                    tags TEXT[], recorded_at TIMESTAMP NOT NULL,
-                    ingested_at TIMESTAMP DEFAULT now()
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS events (
-                    cluster_id TEXT NOT NULL, source TEXT NOT NULL,
-                    event_type TEXT NOT NULL, detail TEXT,
-                    severity TEXT DEFAULT 'info', recorded_at TIMESTAMP NOT NULL,
-                    ingested_at TIMESTAMP DEFAULT now()
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_cluster_time ON metrics(cluster_id, recorded_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(metric_name, recorded_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_cluster_time ON events(cluster_id, recorded_at)")
+            conn.execute(METRICS_SQL)
+            conn.execute(EVENTS_SQL)
+
+            # Indexes
+            conn.execute(INDEXES_SQL)
 
             conn.execute("CHECKPOINT")
 
@@ -258,6 +268,8 @@ def run_pipeline(
     skip_ingest: bool = False,
     sources: list[str] | None = None,
     skip_sources: list[str] | None = None,
+    remote_host: str | None = None,
+    remote_port: int = _REMOTE_PORT,
 ) -> None:
     """Run the full pipeline: ingest → export → splink → load.
 
@@ -265,7 +277,10 @@ def run_pipeline(
     """
     if not skip_ingest:
         log.info({"event": "pipeline_stage", "stage": "ingest"})
-        run_ingest(sources=sources, skip_sources=skip_sources)
+        if remote_host:
+            run_remote_ingest(host=remote_host, port=remote_port, sources=sources, skip_sources=skip_sources)
+        else:
+            run_ingest(sources=sources, skip_sources=skip_sources)
 
     log.info({"event": "pipeline_stage", "stage": "export"})
     total = run_export()

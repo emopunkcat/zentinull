@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import requests
 
@@ -30,6 +31,7 @@ ENDPOINTS = {
         "path": "/monitor/user/device/query",
         "response_path": "results",
         "cols": [
+            "fg_host",
             "mac",
             "ip",
             "hostname",
@@ -47,12 +49,13 @@ ENDPOINTS = {
     "dhcp_leases": {
         "path": "/monitor/system/dhcp",
         "response_path": "results",
-        "cols": ["mac", "ip", "hostname", "lease_type", "expires", "interface", "vlan_id"],
+        "cols": ["fg_host", "mac", "ip", "hostname", "lease_type", "expires", "interface", "vlan_id"],
     },
     "vpn_sessions": {
         "path": "/monitor/vpn/ssl",
         "response_path": "results",
         "cols": [
+            "fg_host",
             "user",
             "auth_type",
             "src_ip",
@@ -69,6 +72,7 @@ ENDPOINTS = {
         "path": "/monitor/user/device",
         "response_path": "results",
         "cols": [
+            "fg_host",
             "mac",
             "ip",
             "hostname",
@@ -86,6 +90,7 @@ ENDPOINTS = {
         "path": "/monitor/firewall/policy",
         "response_path": "results",
         "cols": [
+            "fg_host",
             "policy_id",
             "name",
             "src_intf",
@@ -107,6 +112,7 @@ ENDPOINTS = {
         "path": "/monitor/system/interface",
         "response_path": "results",
         "cols": [
+            "fg_host",
             "name",
             "ip",
             "mac",
@@ -129,7 +135,7 @@ ENDPOINTS = {
     "arp_table": {
         "path": "/monitor/system/arp-table",
         "response_path": "results",
-        "cols": ["ip", "mac", "interface", "type", "vlan_id"],
+        "cols": ["fg_host", "ip", "mac", "interface", "type", "vlan_id"],
     },
 }
 
@@ -151,6 +157,22 @@ def _fg_get(path: str, auth: APIKeyAuth) -> list:  # type: ignore[type-arg]
         return []
 
 
+def _transform_fg(items: list[dict[str, Any]], cols: list[str], fg_host: str) -> list[dict[str, Any]]:
+    """Transform raw FortiGate endpoint data into cleaned records.
+
+    Returns list of records. Pure function — no I/O.
+    """
+    records = []
+    for item in items:
+        rec = {}
+        for col in cols:
+            rec[col] = str(item.get(col, ""))
+        rec["fg_host"] = fg_host
+        rec["raw_json"] = json.dumps(item)
+        records.append(rec)
+    return records
+
+
 def ingest() -> int:
     conn = db("fg")
     total = 0
@@ -162,15 +184,7 @@ def ingest() -> int:
         if not items:
             log.info({"event": "empty", "source": "fg", "table": tname})
             continue
-        records = []
-        for item in items:
-            rec = {}
-            for col in tdef["cols"]:
-                rec[col] = str(item.get(col, ""))
-            rec["fg_host"] = FG_HOST
-            rec["raw_json"] = json.dumps(item)
-            records.append(rec)
-
+        records = _transform_fg(items, tdef["cols"], FG_HOST)  # type: ignore[arg-type]
         conn.execute(f"DROP TABLE IF EXISTS {tname}")
         create_table(conn, tname, tdef["cols"])  # type: ignore[arg-type]
         n = insert_raw(conn, tname, records)

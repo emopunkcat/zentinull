@@ -48,7 +48,7 @@ class StructuredFormatter(logging.Formatter):
 def _fmt_val(v: Any) -> str:
     if v is None:
         return "null"
-    if isinstance(v, (int, float)):
+    if isinstance(v, int | float):
         return str(v)
     if isinstance(v, bool):
         return str(v).lower()

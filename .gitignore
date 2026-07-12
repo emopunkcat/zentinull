@@ -29,6 +29,9 @@ export/splink_output/
 data/*.log
 data/status.json
 
+# Benchmark artifacts
+.benchmarks/
+
 # Local config
 .env
 *.pem

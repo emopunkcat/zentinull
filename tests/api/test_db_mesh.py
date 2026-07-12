@@ -3,6 +3,8 @@ device_metric_summary, device_timeline, device_stats."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from zentinull.api.db import MeshDB
 
 
@@ -253,6 +255,56 @@ class TestListClusters:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# anomalies() — singletons, unnamed, no-serial
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestAnomalies:
+    """anomalies() — singletons, unnamed devices, missing serials."""
+
+    def test_singletons_count(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies() reports 2 singletons (c3, c4)."""
+        result = seeded_meshdb.anomalies()
+        assert result["singletons"] == 2
+
+    def test_no_name_count(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies() reports 1 unnamed device (c3)."""
+        result = seeded_meshdb.anomalies()
+        assert result["no_name"] == 1
+
+    def test_no_serial_count(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies() reports 1 device without serial number (c3)."""
+        result = seeded_meshdb.anomalies()
+        assert result["no_serial"] == 1
+
+    def test_singleton_list_contains_c3_c4(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies() singleton_list cluster_ids are c3 and c4."""
+        result = seeded_meshdb.anomalies()
+        ids = {i["cluster_id"] for i in result["singleton_list"]}
+        assert ids == {"c3", "c4"}
+
+    def test_no_name_list_contains_only_c3(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies() no_name_list contains only c3 (unnamed)."""
+        result = seeded_meshdb.anomalies()
+        ids = {i["cluster_id"] for i in result["no_name_list"]}
+        assert ids == {"c3"}
+
+    def test_no_serial_list_contains_c3(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies() no_serial_list contains c3 (empty serial)."""
+        result = seeded_meshdb.anomalies()
+        ids = {i["cluster_id"] for i in result["no_serial_list"]}
+        assert ids == {"c3"}
+
+    def test_list_models_have_expected_keys(self, seeded_meshdb: MeshDB) -> None:
+        """Each item in anomaly lists has cluster_id and device_name."""
+        result = seeded_meshdb.anomalies()
+        for lst_key in ("singleton_list", "no_name_list", "no_serial_list"):
+            for item in result[lst_key]:
+                assert "cluster_id" in item
+                assert "device_name" in item
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # _resolve_cluster — 7-step resolution cascade
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -294,6 +346,27 @@ class TestResolveCluster:
         # 11:22:33:44:55:66 normalizes to 112233445566 — c2 in both tables
         result = _resolve(seeded_meshdb, "11:22:33:44:55:66")
         assert result == "c2"
+
+    def test_resolve_mac_only_in_source_records(self, seeded_meshdb: MeshDB, tmp_path: Path) -> None:
+        """Step 4 fallback — MAC exists only in source_records.mac_clean, not in devices."""
+        import duckdb
+
+        db_path = seeded_meshdb._path
+        wconn = duckdb.connect(str(db_path))
+        try:
+            wconn.execute(
+                "INSERT INTO source_records (cluster_id, source, mac_clean) VALUES (?, ?, ?)",
+                ["c2", "test_src", "a1b2c3d4e5f6"],
+            )
+        finally:
+            wconn.close()
+        try:
+            result = _resolve(seeded_meshdb, "a1:b2:c3:d4:e5:f6")
+            assert result == "c2"
+        finally:
+            wconn = duckdb.connect(str(db_path))
+            wconn.execute("DELETE FROM source_records WHERE mac_clean = 'a1b2c3d4e5f6'")
+            wconn.close()
 
     def test_resolve_by_ip(self, seeded_meshdb: MeshDB) -> None:
         """Step 5 — IP address LIKE substring match in source_records."""
@@ -403,6 +476,43 @@ class TestBuildStory:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# _row_to_cluster_info — edge cases
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRowToClusterInfoEdgeCases:
+    """_row_to_cluster_info — defensive edge cases."""
+
+    def test_string_sources_parsed(self, tmp_path: Path) -> None:
+        """When sources column is a string (TEXT not TEXT[]), it is parsed into a list."""
+        import duckdb
+
+        db_path = tmp_path / "string_sources.duckdb"
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute("""
+                CREATE TABLE devices (
+                    cluster_id TEXT, device_name TEXT, source_count BIGINT,
+                    sources TEXT, serial_number TEXT, mac_address TEXT,
+                    manufacturer TEXT, model TEXT, os TEXT, assigned_user TEXT,
+                    ip_address TEXT, imei TEXT, record_count BIGINT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO devices VALUES ('c99', 'test-device', 2,
+                    '[sp, me]', 'SN999', '', 'Dell', '', '', '', '', '', 2)
+            """)
+        finally:
+            conn.close()
+        from zentinull.api.db import MeshDB
+
+        mesh = MeshDB(db_path)
+        results = mesh.search("test-device")
+        assert len(results) == 1
+        assert results[0].sources == ["sp", "me"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # lookup — public single-query entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -465,3 +575,19 @@ class TestBatchLookup:
         """Empty input returns empty list."""
         results = seeded_meshdb.batch_lookup([])
         assert results == []
+
+
+class TestBatchLookupErrors:
+    """batch_lookup() — error handling when queries fail."""
+
+    def test_empty_db_returns_none(self, tmp_path: Path) -> None:
+        """batch_lookup on a DB with no tables catches exceptions and returns None."""
+        import duckdb
+
+        db_path = tmp_path / "empty.duckdb"
+        duckdb.connect(str(db_path)).close()
+        from zentinull.api.db import MeshDB
+
+        mesh = MeshDB(db_path)
+        results = mesh.batch_lookup(["anything"])
+        assert results == [None]

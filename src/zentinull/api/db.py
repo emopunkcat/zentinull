@@ -1,11 +1,10 @@
-# mypy: ignore-errors
-
 """DuckDB query layer — typed, async-safe, single connection per request."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any, cast
 
 import duckdb
 
@@ -41,9 +40,9 @@ class MeshDB:
 
     # ── Lookups ──────────────────────────────────────────────────────────
 
-    def batch_lookup(self, queries: list[str]) -> list[dict | None]:
+    def batch_lookup(self, queries: list[str]) -> list[dict[str, Any] | None]:
         """Resolve multiple queries in a single DuckDB connection."""
-        results: list[dict | None] = []
+        results: list[dict[str, Any] | None] = []
         conn = self._conn()
         try:
             for q in queries:
@@ -78,6 +77,11 @@ class MeshDB:
         finally:
             conn.close()
 
+    @staticmethod
+    def _first_col(row: Any | None) -> str | None:
+        """Extract first column from a fetchone result, or None."""
+        return cast(str, row[0]) if row else None
+
     def _resolve_cluster(self, conn: duckdb.DuckDBPyConnection, q: str) -> str | None:
         """Find the best-matching cluster_id for a query string."""
         ql = q.lower()
@@ -85,21 +89,21 @@ class MeshDB:
         # 1. Exact cluster_id
         row = conn.execute("SELECT cluster_id FROM devices WHERE cluster_id = ?", [ql]).fetchone()
         if row:
-            return row[0]
+            return self._first_col(row)
 
         # 2. Exact device_name
         row = conn.execute(
             "SELECT cluster_id FROM devices WHERE lower(device_name) = ? ORDER BY source_count DESC LIMIT 1", [ql]
         ).fetchone()
         if row:
-            return row[0]
+            return self._first_col(row)
 
         # 3. Exact serial (case-insensitive)
         row = conn.execute(
             "SELECT cluster_id FROM devices WHERE lower(serial_number) = ? ORDER BY source_count DESC LIMIT 1", [ql]
         ).fetchone()
         if row:
-            return row[0]
+            return self._first_col(row)
 
         # 4. MAC (normalized)
         mac = _norm_mac(q)
@@ -108,20 +112,20 @@ class MeshDB:
                 "SELECT cluster_id FROM devices WHERE mac_address = ? ORDER BY source_count DESC LIMIT 1", [mac]
             ).fetchone()
             if row:
-                return row[0]
+                return self._first_col(row)
             # Also check source_records for MAC
             row = conn.execute(
                 "SELECT cluster_id FROM source_records WHERE mac_clean = ? ORDER BY 1 LIMIT 1", [mac]
             ).fetchone()
             if row:
-                return row[0]
+                return self._first_col(row)
 
         # 5. Exact IP
         row = conn.execute(
             "SELECT cluster_id FROM source_records WHERE ip_address LIKE ? ORDER BY 1 LIMIT 1", [f"%{q}%"]
         ).fetchone()
         if row:
-            return row[0]
+            return self._first_col(row)
 
         # 6. User substring
         row = conn.execute(
@@ -129,7 +133,7 @@ class MeshDB:
             [f"%{ql}%"],
         ).fetchone()
         if row:
-            return row[0]
+            return self._first_col(row)
 
         # 7. Full-text fallback across source_records
         row = conn.execute(
@@ -151,7 +155,7 @@ class MeshDB:
             [f"%{ql}%"] * 9,
         ).fetchone()
         if row:
-            return row[0]
+            return self._first_col(row)
 
         log.info({"event": "resolve_miss", "query": q})
         return None
@@ -307,14 +311,22 @@ class MeshDB:
 
     # ── Aggregations ─────────────────────────────────────────────────────
 
-    def dashboard(self) -> dict:
+    def dashboard(self) -> dict[str, Any]:
         """Dashboard stats."""
         conn = self._conn()
         try:
-            total_devices = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
-            total_records = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()[0]
-            multi = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count > 1").fetchone()[0]
-            singles = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()[0]
+            row = conn.execute("SELECT COUNT(*) FROM devices").fetchone()
+            assert row is not None
+            total_devices: int = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()
+            assert row is not None
+            total_records: int = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count > 1").fetchone()
+            assert row is not None
+            multi: int = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()
+            assert row is not None
+            singles: int = row[0]
 
             # Source distribution
             source_counts = dict(
@@ -324,14 +336,16 @@ class MeshDB:
             )
 
             # Coverage
-            coverage = {}
+            coverage: dict[str, str] = {}
             for field, label in [
                 ("serial_number", "serial"),
                 ("mac_address", "mac"),
                 ("device_name", "name"),
                 ("assigned_user", "assigned_user"),
             ]:
-                n = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {field} != ''").fetchone()[0]
+                row = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {field} != ''").fetchone()
+                assert row is not None
+                n: int = row[0]
                 coverage[label] = f"{n}/{total_devices} ({100 * n // max(total_devices, 1)}%)"
 
             # Top 10 clusters by source count
@@ -356,12 +370,16 @@ class MeshDB:
         finally:
             conn.close()
 
-    def mesh_stats(self) -> dict:
+    def mesh_stats(self) -> dict[str, Any]:
         """Cross-source cluster statistics."""
         conn = self._conn()
         try:
-            total_devices = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
-            total_records = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()[0]
+            row = conn.execute("SELECT COUNT(*) FROM devices").fetchone()
+            assert row is not None
+            total_devices: int = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()
+            assert row is not None
+            total_records: int = row[0]
 
             # Source count distribution
             sc_dist = dict(
@@ -385,7 +403,9 @@ class MeshDB:
                 ).fetchall()
             )
 
-            singles = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()[0]
+            row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()
+            assert row is not None
+            singles: int = row[0]
 
             return {
                 "total_clusters": total_devices,
@@ -399,29 +419,39 @@ class MeshDB:
         finally:
             conn.close()
 
-    def anomalies(self) -> dict:
+    def anomalies(self) -> dict[str, Any]:
         """Singletons, no-name, no-serial devices."""
         conn = self._conn()
         try:
-            cols = [d[0] for d in conn.description]
             singletons = conn.execute(
                 "SELECT * FROM devices WHERE source_count = 1 ORDER BY device_name LIMIT 50"
             ).fetchall()
+            cols = [d[0] for d in conn.description]
             no_name = conn.execute("SELECT * FROM devices WHERE device_name = '(unnamed)' LIMIT 20").fetchall()
             no_serial = conn.execute(
                 "SELECT * FROM devices WHERE serial_number = '' ORDER BY device_name LIMIT 30"
             ).fetchall()
 
+            row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()
+            assert row is not None
+            singletons_total: int = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM devices WHERE device_name = '(unnamed)'").fetchone()
+            assert row is not None
+            no_name_total: int = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM devices WHERE serial_number = ''").fetchone()
+            assert row is not None
+            no_serial_total: int = row[0]
+
             return {
-                "singletons": conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()[0],
+                "singletons": singletons_total,
                 "singleton_list": [
                     self._row_to_cluster_info(dict(zip(cols, r, strict=True))).model_dump() for r in singletons
                 ],
-                "no_name": conn.execute("SELECT COUNT(*) FROM devices WHERE device_name = '(unnamed)'").fetchone()[0],
+                "no_name": no_name_total,
                 "no_name_list": [
                     self._row_to_cluster_info(dict(zip(cols, r, strict=True))).model_dump() for r in no_name
                 ],
-                "no_serial": conn.execute("SELECT COUNT(*) FROM devices WHERE serial_number = ''").fetchone()[0],
+                "no_serial": no_serial_total,
                 "no_serial_list": [
                     self._row_to_cluster_info(dict(zip(cols, r, strict=True))).model_dump() for r in no_serial
                 ],
@@ -443,7 +473,9 @@ class MeshDB:
                 where.append(f"list_contains(sources, '{source}')")
             clause = " AND ".join(where)
 
-            total = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {clause}").fetchone()[0]
+            row = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {clause}").fetchone()
+            assert row is not None
+            total: int = row[0]
             rows = conn.execute(
                 f"SELECT * FROM devices WHERE {clause} "
                 f"ORDER BY source_count DESC, device_name LIMIT {limit} OFFSET {offset}"
@@ -463,12 +495,12 @@ class MeshDB:
         source: str = "",
         hours: int = 24,
         limit: int = 500,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Time-series metrics for a device. Filterable by metric name, source, time range."""
         conn = self._conn()
         try:
             where = ["cluster_id = ?"]
-            params: list = [cluster_id]
+            params: list[object] = [cluster_id]
             if metric:
                 where.append("metric_name = ?")
                 params.append(metric)
@@ -494,11 +526,11 @@ class MeshDB:
             rows = conn.execute(
                 "SELECT DISTINCT metric_name FROM metrics WHERE cluster_id = ? ORDER BY metric_name", [cluster_id]
             ).fetchall()
-            return [r[0] for r in rows]
+            return [cast(str, r[0]) for r in rows]
         finally:
             conn.close()
 
-    def device_metric_summary(self, cluster_id: str, hours: int = 24) -> dict[str, dict]:
+    def device_metric_summary(self, cluster_id: str, hours: int = 24) -> dict[str, dict[str, Any]]:
         """Latest value + avg/max/min per metric for a device."""
         conn = self._conn()
         try:
@@ -520,9 +552,9 @@ class MeshDB:
             """,
                 [cluster_id],
             ).fetchall()
-            results: dict[str, dict] = {}
+            results: dict[str, dict[str, Any]] = {}
             for r in rows:
-                results[r[0]] = {
+                results[cast(str, r[0])] = {
                     "count": r[1],
                     "avg": r[2],
                     "max": r[3],
@@ -533,7 +565,7 @@ class MeshDB:
         finally:
             conn.close()
 
-    def device_timeline(self, cluster_id: str, *, hours: int = 168, limit: int = 100) -> list[dict]:
+    def device_timeline(self, cluster_id: str, *, hours: int = 168, limit: int = 100) -> list[dict[str, Any]]:
         """Recent events for a device, ordered by time desc."""
         conn = self._conn()
         try:
@@ -552,7 +584,7 @@ class MeshDB:
         finally:
             conn.close()
 
-    def device_stats(self, cluster_id: str) -> dict:
+    def device_stats(self, cluster_id: str) -> dict[str, Any]:
         """Current state: latest metric values + event counts."""
         conn = self._conn()
         try:
@@ -568,9 +600,9 @@ class MeshDB:
                 [cluster_id],
             ).fetchall()
 
-            metrics = {}
+            metrics: dict[str, Any] = {}
             for r in metric_rows:
-                metrics[r[0]] = {
+                metrics[cast(str, r[0])] = {
                     "value": r[1],
                     "text": r[2],
                     "source": r[3],
@@ -596,7 +628,7 @@ class MeshDB:
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
-    def _row_to_cluster_info(self, row: dict) -> ClusterInfo:
+    def _row_to_cluster_info(self, row: dict[str, Any]) -> ClusterInfo:
         # sources is stored as a DuckDB LIST — convert
         raw_sources = row.get("sources", [])
         if isinstance(raw_sources, str):

@@ -1,0 +1,50 @@
+# ── Context exclusion — speeds build, avoids cache invalidation ──
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.env
+.venv/
+venv/
+
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.omo
+
+# Runtime data (gitignored anyway, but explicit)
+data/*.sqlite
+data/*.duckdb
+data/*.log
+data/status.json
+export/
+
+# Cache artifacts
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage*
+.benchmarks/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project-specific
+.env.example  # no secrets in container
+*.pem
+*.p7m

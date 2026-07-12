@@ -241,6 +241,11 @@ def export() -> None:
 
     # Summary
     log.info({"event": "export_complete", "total_records": len(all_rows), "path": str(out_path)})
+
+    if not all_rows:
+        log.warning({"event": "export_empty", "reason": "no_records_from_any_source"})
+        out_path.unlink(missing_ok=True)
+        return
     sources: dict[str, int] = {}
     for r in all_rows:
         sources[r["source"]] = sources.get(r["source"], 0) + 1

@@ -3,6 +3,10 @@ SharePoint ingest via n8n webhook.
 Auto-detects columns from actual API response.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import requests
 
 from ..logging_config import get_logger
@@ -22,6 +26,52 @@ ENDPOINTS = [
 ]
 
 
+def _sanitize_col_name(name: str, existing: set[str]) -> str:
+    """Sanitize a column name for SQL and deduplicate within *existing*."""
+    safe = name.replace("@", "").replace(".", "_").replace("-", "_")
+    safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in safe)
+    safe = safe.strip("_").lower() or "col"
+    if safe == "id":
+        safe = "sp_id"
+    while safe in existing:
+        safe += "_"
+    existing.add(safe)
+    return safe
+
+
+def _transform_sharepoint(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Transform raw SharePoint items into cleaned records with sanitized column names.
+
+    Handles auto-detected columns and field extraction.
+    Returns (records, sanitized_column_names). Pure function — no I/O.
+    """
+    # Phase 1: extract raw records from items
+    records = []
+    for item in items:
+        fields = item.get("fields", item)
+        rec = {}
+        for k, v in fields.items():
+            if not isinstance(v, dict | list):
+                rec[k.lower()] = str(v) if v is not None else ""
+        rec["sharepoint_id"] = str(item.get("id", ""))
+        records.append(rec)
+
+    # Phase 2: sanitize column names
+    all_cols = list({k for r in records for k in r})
+    all_cols = [c for c in all_cols if c not in ("raw_json",)]
+    san_cols: list[str] = []
+    used: set[str] = set()
+    for c in all_cols:
+        san_cols.append(_sanitize_col_name(c, used))
+    col_map = dict(zip(all_cols, san_cols, strict=True))
+    for rec_item in records:
+        for old, new in col_map.items():
+            if old != new:
+                rec_item[new] = rec_item.pop(old)
+
+    return records, san_cols
+
+
 def ingest() -> int:
     conn = db("sp")
     total = 0
@@ -37,50 +87,12 @@ def ingest() -> int:
                 log.info({"event": "empty", "source": "sp", "endpoint": endpoint})
                 continue
 
-            # Auto-detect columns from first record
-            fields = items[0].get("fields", items[0])
-            # Build all records first
-            records = []
-            for item in items:
-                fields = item.get("fields", item)
-                rec = {}
-                for k, v in fields.items():
-                    if not isinstance(v, (dict, list)):
-                        rec[k.lower()] = str(v) if v is not None else ""
-                rec["sharepoint_id"] = str(item.get("id", ""))
-                records.append(rec)
-
-            # Get all unique column names from records, sanitizing for SQL
-            all_cols = list({k for r in records for k in r})
-            all_cols = [c for c in all_cols if c not in ("raw_json",)]
-            # Sanitize column names: replace @ and special chars
-            san_cols = []
-            for c in all_cols:
-                safe = c.replace("@", "").replace(".", "_").replace("-", "_")
-                safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in safe)
-                safe = safe.strip("_").lower() or "col"
-                # Avoid 'id' conflict with auto-increment PK
-                if safe == "id":
-                    safe = "sp_id"
-                # Remove duplicates
-                while safe in san_cols:
-                    safe += "_"
-                san_cols.append(safe)
-            col_map = dict(zip(all_cols, san_cols, strict=True))
-            for rec_item in records:
-                for old, new in col_map.items():
-                    if old != new:
-                        rec_item[new] = rec_item.pop(old)
-            # Create table with sanitized schema
+            records, san_cols = _transform_sharepoint(items)
             create_table(conn, endpoint, san_cols)
-
-            # Bulk insert
             n = insert_raw(conn, endpoint, records)
             log.info({"event": "inserted", "source": "sp", "endpoint": endpoint, "rows": n})
             total += n
-
         except Exception as e:
             log.error({"event": "fetch_failed", "source": "sp", "endpoint": endpoint, "error": str(e)})
-
     conn.close()
     return total

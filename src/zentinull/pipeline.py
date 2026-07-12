@@ -13,8 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import duckdb
-
 from .logging_config import StepTimer, get_logger, setup
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -60,84 +58,10 @@ def _run_splink() -> None:
 
 
 def _load_to_duckdb() -> None:
-    """Load clusters.csv into DuckDB mesh database."""
-    mesh_path = ROOT / "data" / "mesh.duckdb"
-    clusters_csv = ROOT / "export" / "splink_output" / "clusters.csv"
+    """Load clusters.csv into DuckDB mesh using temp-and-swap (delegated)."""
+    from .cli.pipeline import run_load
 
-    if not clusters_csv.exists():
-        raise FileNotFoundError(f"{clusters_csv} not found — run splink first")
-
-    with StepTimer(log, "duckdb.load"):
-        conn = duckdb.connect(str(mesh_path))
-
-        # Load clusters CSV into source_records table
-        conn.execute(
-            """
-            CREATE OR REPLACE TABLE source_records AS
-            SELECT * FROM read_csv_auto(?)
-        """,
-            [str(clusters_csv)],
-        )
-
-        # Build devices table: one row per cluster, consolidated
-        conn.execute("""
-            CREATE OR REPLACE TABLE devices AS
-            SELECT
-                cluster_id,
-                COALESCE(
-                    NULLIF(MIN(CASE WHEN name_clean != '' THEN name_clean END), ''),
-                    NULLIF(MIN(CASE WHEN name != '' THEN name END), ''),
-                    '(unnamed)'
-                ) AS device_name,
-                COUNT(DISTINCT source) AS source_count,
-                LIST(DISTINCT source ORDER BY source) AS sources,
-                COALESCE(NULLIF(MIN(CASE WHEN serial_number != '' THEN serial_number END), ''), '') AS serial_number,
-                COALESCE(NULLIF(MIN(CASE WHEN mac_clean != '' THEN mac_clean END), ''), '') AS mac_address,
-                COALESCE(NULLIF(MIN(CASE WHEN manufacturer != '' THEN manufacturer END), ''), '') AS manufacturer,
-                COALESCE(NULLIF(MIN(CASE WHEN model != '' THEN model END), ''), '') AS model,
-                COALESCE(NULLIF(MIN(CASE WHEN os != '' THEN os END), ''), '') AS os,
-                COALESCE(NULLIF(MIN(CASE WHEN assigned_user != '' THEN assigned_user END), ''), '') AS assigned_user,
-                COALESCE(NULLIF(MIN(CASE WHEN ip_address != '' THEN ip_address END), ''), '') AS ip_address,
-                COALESCE(NULLIF(MIN(CASE WHEN imei != '' THEN imei END), ''), '') AS imei,
-                COUNT(*) AS record_count
-            FROM source_records
-            GROUP BY cluster_id
-        """)
-
-        # Indexes
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(device_name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_serial ON devices(serial_number)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_records_cluster ON source_records(cluster_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_records_mac ON source_records(mac_clean)")
-
-        # Metrics & Events (append-only)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS metrics (
-                cluster_id TEXT NOT NULL, source TEXT NOT NULL,
-                metric_name TEXT NOT NULL, value DOUBLE, text_value TEXT,
-                tags TEXT[], recorded_at TIMESTAMP NOT NULL,
-                ingested_at TIMESTAMP DEFAULT now()
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                cluster_id TEXT NOT NULL, source TEXT NOT NULL,
-                event_type TEXT NOT NULL, detail TEXT,
-                severity TEXT DEFAULT 'info', recorded_at TIMESTAMP NOT NULL,
-                ingested_at TIMESTAMP DEFAULT now()
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_cluster_time ON metrics(cluster_id, recorded_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(metric_name, recorded_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_cluster_time ON events(cluster_id, recorded_at)")
-
-        conn.execute("CHECKPOINT")
-
-        device_count = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]  # type: ignore[index]
-        record_count = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()[0]  # type: ignore[index]
-        conn.close()
-
-        log.info({"event": "mesh_loaded", "devices": device_count, "records": record_count})
+    run_load()
 
 
 def run(*, skip_ingest: bool = False, dry_run: bool = False) -> None:
@@ -164,11 +88,16 @@ def run(*, skip_ingest: bool = False, dry_run: bool = False) -> None:
     log.info({"event": "pipeline_complete", "steps": len(steps) + 2})
 
 
-if __name__ == "__main__":
-    skip_ingest = "--skip-ingest" in sys.argv
-    dry_run = "--dry-run" in sys.argv
+def _main() -> None:
+    """CLI entry point for ``python -m zentinull.pipeline``."""
+    skip_ingest_flag = "--skip-ingest" in sys.argv
+    dry_run_flag = "--dry-run" in sys.argv
     try:
-        run(skip_ingest=skip_ingest, dry_run=dry_run)
+        run(skip_ingest=skip_ingest_flag, dry_run=dry_run_flag)
     except Exception:
         log.exception("pipeline failed")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    _main()

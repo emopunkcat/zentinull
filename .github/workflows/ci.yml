@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Format check (ruff)
+        run: ruff format --check src/zentinull/ scripts/ tests/
+      - name: Lint (ruff)
+        run: ruff check src/zentinull/ scripts/ tests/
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Type check (mypy)
+        run: mypy src/zentinull/
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Test (pytest)
+        run: python3 -m pytest tests/ -v --cov=src/zentinull --cov-report=term-missing
+
+  benchmark:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Restore benchmark history cache
+        uses: actions/cache@v4
+        with:
+          path: .benchmarks
+          key: bench-history-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            bench-history-${{ github.ref_name }}-
+            bench-history-main-
+      - name: Run API benchmarks (regression gate)
+        id: bench
+        run: |
+          python3 scripts/bench_api.py --ci --regression-threshold=25 --json > .benchmarks/ci_output.json
+        continue-on-error: true
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: .benchmarks/
+          retention-days: 30
+      - name: Check benchmark exit code
+        if: steps.bench.outcome != 'success'
+        run: |
+          echo "::error::API benchmark regression detected — check benchmark-results artifact"
+          exit 1

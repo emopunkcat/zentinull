@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,8 +20,7 @@ MESH_DB = ROOT / "data" / "mesh.duckdb"
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
-    """Wire up the DuckDB mesh database on startup."""
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup(level="INFO")
     if not MESH_DB.exists():
         log.warning({"event": "mesh_not_found", "path": str(MESH_DB)})

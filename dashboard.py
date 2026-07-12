@@ -127,8 +127,20 @@ def _search_devices(query: str, limit: int = 50) -> list[dict[str, Any]]:
             """,
             [ql, ql, ql, ql, ql, ql, limit],
         ).fetchall()
-        cols = ["cluster_id", "device_name", "source_count", "sources", "serial_number",
-                "mac_address", "manufacturer", "model", "os", "assigned_user", "ip_address", "record_count"]
+        cols = [
+            "cluster_id",
+            "device_name",
+            "source_count",
+            "sources",
+            "serial_number",
+            "mac_address",
+            "manufacturer",
+            "model",
+            "os",
+            "assigned_user",
+            "ip_address",
+            "record_count",
+        ]
         return [dict(zip(cols, r, strict=True)) for r in rows]
     finally:
         conn.close()
@@ -218,8 +230,14 @@ freshness = status.get("freshness", {})
 
 # ── Pipeline status KPI row ────────────────────────────────────────────────────
 
+
 def _status_icon(s: str) -> str:
-    icons = {"ok": ":material/check_circle:", "fail": ":material/error:", "running": ":material/hourglass_top:", "": ":material/radio_button_unchecked:"}
+    icons = {
+        "ok": ":material/check_circle:",
+        "fail": ":material/error:",
+        "running": ":material/hourglass_top:",
+        "": ":material/radio_button_unchecked:",
+    }
     return icons.get(s, ":material/help:")
 
 
@@ -256,8 +274,12 @@ st.subheader("Data freshness")
 if freshness:
     fcols = st.columns(min(len(freshness), 6))
     src_labels = {
-        "sp": "SharePoint", "me": "ManageEngine", "fg": "FortiGate",
-        "zbx": "Zabbix", "ad": "AD", "sdp": "SDP",
+        "sp": "SharePoint",
+        "me": "ManageEngine",
+        "fg": "FortiGate",
+        "zbx": "Zabbix",
+        "ad": "AD",
+        "sdp": "SDP",
     }
     for i, (skey, sf) in enumerate(sorted(freshness.items())):
         with fcols[i]:
@@ -337,20 +359,22 @@ search_query = st.text_input(
 if search_query:
     results = _search_devices(search_query)
     if results:
-        st.caption(f"Found {len(results)} device(s) matching \"{search_query}\"")
+        st.caption(f'Found {len(results)} device(s) matching "{search_query}"')
 
         # Build display table
         display_cols = ["device_name", "source_count", "sources", "serial_number", "mac_address", "manufacturer"]
         display_data = []
         for r in results:
-            display_data.append({
-                "Device": r["device_name"],
-                "Sources": r["source_count"],
-                "Source list": ", ".join(r["sources"]) if isinstance(r["sources"], list) else str(r["sources"]),
-                "Serial": r["serial_number"] or "—",
-                "MAC": r["mac_address"] or "—",
-                "Manufacturer": r["manufacturer"] or "—",
-            })
+            display_data.append(
+                {
+                    "Device": r["device_name"],
+                    "Sources": r["source_count"],
+                    "Source list": ", ".join(r["sources"]) if isinstance(r["sources"], list) else str(r["sources"]),
+                    "Serial": r["serial_number"] or "—",
+                    "MAC": r["mac_address"] or "—",
+                    "Manufacturer": r["manufacturer"] or "—",
+                }
+            )
 
         st.dataframe(display_data, use_container_width=True, hide_index=True)
 
@@ -368,7 +392,9 @@ if search_query:
                     st.markdown(f"**Device:** {dev['device_name']}")
                     st.markdown(f"**Cluster ID:** `{dev['cluster_id']}`")
                     st.markdown(f"**Source count:** {dev['source_count']}")
-                    st.markdown(f"**Sources:** {', '.join(dev['sources']) if isinstance(dev['sources'], list) else dev['sources']}")
+                    st.markdown(
+                        f"**Sources:** {', '.join(dev['sources']) if isinstance(dev['sources'], list) else dev['sources']}"
+                    )
                     st.markdown(f"**Record count:** {dev['record_count']}")
                 with detail_col2:
                     st.markdown(f"**Serial:** {dev['serial_number'] or '—'}")
@@ -379,4 +405,4 @@ if search_query:
                     st.markdown(f"**Assigned user:** {dev['assigned_user'] or '—'}")
                     st.markdown(f"**IP address:** {dev['ip_address'] or '—'}")
     else:
-        st.info(f"No devices found matching \"{search_query}\"")
+        st.info(f'No devices found matching "{search_query}"')

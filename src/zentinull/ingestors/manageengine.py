@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import requests
 
@@ -70,6 +71,90 @@ def _mdm_fetch(auth: OAuth2RefreshAuth) -> list:  # type: ignore[type-arg]
     return r.json()  # type: ignore[no-any-return]
 
 
+def _transform_ec_computers(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Transform raw ManageEngine EC computer data into cleaned records.
+
+    Returns (records, columns). Pure function — no I/O.
+    """
+    records = []
+    for item in items:
+        records.append(
+            {
+                "resource_id": str(item.get("resource_id", "")),
+                "serial_number": str(item.get("serial_number", "")),
+                "mac_address": str(item.get("mac_address", "")),
+                "name": str(item.get("name", "")),
+                "manufacturer": str(item.get("manufacturer", "")),
+                "model": str(item.get("model", "")),
+                "os_name": str(item.get("os_name", "")),
+                "os_version": str(item.get("os_version", "")),
+                "assigned_user": str(item.get("logged_on_user", "")),
+                "last_seen": str(item.get("last_scan_time", "")),
+                "domain_name": str(item.get("domain_name", "")),
+                "ip_address": str(item.get("ip_address", "")),
+                "raw_json": json.dumps(item),
+                "source_type": "ec",
+            }
+        )
+    columns = [
+        "resource_id",
+        "serial_number",
+        "mac_address",
+        "name",
+        "manufacturer",
+        "model",
+        "os_name",
+        "os_version",
+        "assigned_user",
+        "last_seen",
+        "domain_name",
+        "ip_address",
+        "source_type",
+    ]
+    return records, columns
+
+
+def _transform_mdm_devices(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Transform raw ManageEngine MDM device data into cleaned records.
+
+    Returns (records, columns). Pure function — no I/O.
+    """
+    records = []
+    for item in items:
+        records.append(
+            {
+                "device_id": str(item.get("device_id", "")),
+                "serial_number": str(item.get("serial_number", "")),
+                "imei": str(item.get("imei", "")),
+                "udid": str(item.get("udid", "")),
+                "name": str(item.get("name", "")),
+                "model": str(item.get("model", "")),
+                "os_version": str(item.get("os_version", "")),
+                "user_email": str(item.get("user_email", "")),
+                "platform": str(item.get("platform", "")),
+                "enrolled_at": str(item.get("enrolled_time", "")),
+                "last_seen": str(item.get("last_seen_time", "")),
+                "raw_json": json.dumps(item),
+                "source_type": "mdm",
+            }
+        )
+    columns = [
+        "device_id",
+        "serial_number",
+        "imei",
+        "udid",
+        "name",
+        "model",
+        "os_version",
+        "user_email",
+        "platform",
+        "enrolled_at",
+        "last_seen",
+        "source_type",
+    ]
+    return records, columns
+
+
 def ingest() -> int:
     conn = db("me")
     total = 0
@@ -87,45 +172,8 @@ def ingest() -> int:
         "message_response.scancomputers",
     )
     if items:
-        records = []
-        for item in items:
-            records.append(
-                {
-                    "resource_id": str(item.get("resource_id", "")),
-                    "serial_number": str(item.get("serial_number", "")),
-                    "mac_address": str(item.get("mac_address", "")),
-                    "name": str(item.get("name", "")),
-                    "manufacturer": str(item.get("manufacturer", "")),
-                    "model": str(item.get("model", "")),
-                    "os_name": str(item.get("os_name", "")),
-                    "os_version": str(item.get("os_version", "")),
-                    "assigned_user": str(item.get("logged_on_user", "")),
-                    "last_seen": str(item.get("last_scan_time", "")),
-                    "domain_name": str(item.get("domain_name", "")),
-                    "ip_address": str(item.get("ip_address", "")),
-                    "raw_json": json.dumps(item),
-                    "source_type": "ec",
-                }
-            )
-        create_table(
-            conn,
-            "computers",
-            [
-                "resource_id",
-                "serial_number",
-                "mac_address",
-                "name",
-                "manufacturer",
-                "model",
-                "os_name",
-                "os_version",
-                "assigned_user",
-                "last_seen",
-                "domain_name",
-                "ip_address",
-                "source_type",
-            ],
-        )
+        records, columns = _transform_ec_computers(items)
+        create_table(conn, "computers", columns)
         n = insert_raw(conn, "computers", records)
         log.info({"event": "inserted", "source": "me", "table": "computers", "rows": n})
         total += n
@@ -133,43 +181,8 @@ def ingest() -> int:
     # --- MDM Devices ---
     items = _mdm_fetch(auth)
     if items:
-        records = []
-        for item in items:
-            records.append(
-                {
-                    "device_id": str(item.get("device_id", "")),
-                    "serial_number": str(item.get("serial_number", "")),
-                    "imei": str(item.get("imei", "")),
-                    "udid": str(item.get("udid", "")),
-                    "name": str(item.get("name", "")),
-                    "model": str(item.get("model", "")),
-                    "os_version": str(item.get("os_version", "")),
-                    "user_email": str(item.get("user_email", "")),
-                    "platform": str(item.get("platform", "")),
-                    "enrolled_at": str(item.get("enrolled_time", "")),
-                    "last_seen": str(item.get("last_seen_time", "")),
-                    "raw_json": json.dumps(item),
-                    "source_type": "mdm",
-                }
-            )
-        create_table(
-            conn,
-            "mdm_devices",
-            [
-                "device_id",
-                "serial_number",
-                "imei",
-                "udid",
-                "name",
-                "model",
-                "os_version",
-                "user_email",
-                "platform",
-                "enrolled_at",
-                "last_seen",
-                "source_type",
-            ],
-        )
+        records, columns = _transform_mdm_devices(items)
+        create_table(conn, "mdm_devices", columns)
         n = insert_raw(conn, "mdm_devices", records)
         log.info({"event": "inserted", "source": "me", "table": "mdm_devices", "rows": n})
         total += n
