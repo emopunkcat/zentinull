@@ -225,7 +225,7 @@ class TestCmdIngest:
         from serve import cmd_ingest
 
         with patch("zentinull.cli.pipeline.run_ingest", return_value={"sp": 10, "fg": 5}):
-            args = _make_args(source=None, skip=None, remote=None)
+            args = _make_args(source=None, skip=None)
             cmd_ingest(args)
 
         captured = capsys.readouterr()
@@ -236,7 +236,7 @@ class TestCmdIngest:
         from serve import cmd_ingest
 
         with patch("zentinull.cli.pipeline.run_ingest", return_value={"sp": 10, "zbx": -1}):
-            args = _make_args(source=None, skip=None, remote=None)
+            args = _make_args(source=None, skip=None)
             cmd_ingest(args)
 
         captured = capsys.readouterr()
@@ -248,7 +248,7 @@ class TestCmdIngest:
         from serve import cmd_ingest
 
         with patch("zentinull.cli.pipeline.run_ingest", return_value={"fg": 5}) as mock_ingest:
-            args = _make_args(source="fg, sp", skip=None, remote=None)
+            args = _make_args(source="fg, sp", skip=None)
             cmd_ingest(args)
             mock_ingest.assert_called_once_with(sources=["fg", "sp"], skip_sources=None)
 
@@ -256,7 +256,7 @@ class TestCmdIngest:
         from serve import cmd_ingest
 
         with patch("zentinull.cli.pipeline.run_ingest", return_value={"sp": 10}) as mock_ingest:
-            args = _make_args(source=None, skip="zbx, ad", remote=None)
+            args = _make_args(source=None, skip="zbx, ad")
             cmd_ingest(args)
             mock_ingest.assert_called_once_with(sources=None, skip_sources=["zbx", "ad"])
 
@@ -336,37 +336,33 @@ class TestCmdPipeline:
         from serve import cmd_pipeline
 
         with patch("zentinull.cli.pipeline.run_pipeline") as mock_pipe:
-            args = _make_args(source=None, skip=None, skip_ingest=False, remote=None)
+            args = _make_args(source=None, skip=None, skip_ingest=False)
             cmd_pipeline(args)
-            mock_pipe.assert_called_once_with(skip_ingest=False, sources=None, skip_sources=None, remote_host=None)
+            mock_pipe.assert_called_once_with(skip_ingest=False, sources=None, skip_sources=None)
 
     def test_cmd_pipeline_skip_ingest(self) -> None:
         from serve import cmd_pipeline
 
         with patch("zentinull.cli.pipeline.run_pipeline") as mock_pipe:
-            args = _make_args(source=None, skip=None, skip_ingest=True, remote=None)
+            args = _make_args(source=None, skip=None, skip_ingest=True)
             cmd_pipeline(args)
-            mock_pipe.assert_called_once_with(skip_ingest=True, sources=None, skip_sources=None, remote_host=None)
+            mock_pipe.assert_called_once_with(skip_ingest=True, sources=None, skip_sources=None)
 
     def test_cmd_pipeline_with_sources(self) -> None:
         from serve import cmd_pipeline
 
         with patch("zentinull.cli.pipeline.run_pipeline") as mock_pipe:
-            args = _make_args(source="sp, fg", skip=None, skip_ingest=False, remote=None)
+            args = _make_args(source="sp, fg", skip=None, skip_ingest=False)
             cmd_pipeline(args)
-            mock_pipe.assert_called_once_with(
-                skip_ingest=False, sources=["sp", "fg"], skip_sources=None, remote_host=None
-            )
+            mock_pipe.assert_called_once_with(skip_ingest=False, sources=["sp", "fg"], skip_sources=None)
 
     def test_cmd_pipeline_with_skip(self) -> None:
         from serve import cmd_pipeline
 
         with patch("zentinull.cli.pipeline.run_pipeline") as mock_pipe:
-            args = _make_args(source=None, skip="zbx, ad", skip_ingest=False, remote=None)
+            args = _make_args(source=None, skip="zbx, ad", skip_ingest=False)
             cmd_pipeline(args)
-            mock_pipe.assert_called_once_with(
-                skip_ingest=False, sources=None, skip_sources=["zbx", "ad"], remote_host=None
-            )
+            mock_pipe.assert_called_once_with(skip_ingest=False, sources=None, skip_sources=["zbx", "ad"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

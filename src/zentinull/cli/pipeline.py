@@ -83,63 +83,6 @@ def run_ingest(sources: list[str] | None = None, skip_sources: list[str] | None 
     return results
 
 
-_REMOTE_PORT = 9999
-
-
-def run_remote_ingest(
-    host: str,
-    port: int = _REMOTE_PORT,
-    sources: list[str] | None = None,
-    skip_sources: list[str] | None = None,
-) -> dict[str, int]:
-    """Trigger ingest on a remote proxy and download the SQLite databases.
-
-    Contacts the remote daemon at host:port, triggers ingest for the requested
-    sources (or all 6), downloads each resulting .sqlite file into the local
-    data/ directory, then returns the {source_name: row_count} results.
-    """
-    import httpx
-
-    base = f"http://{host}:{port}"
-    results: dict[str, int] = {}
-    record_start("ingest")
-    source_keys = list(SOURCE_MAP.keys())
-
-    if sources is not None:
-        source_keys = [k for k in source_keys if k in sources]
-    skip_set = set(skip_sources or [])
-    source_keys = [k for k in source_keys if k not in skip_set]
-
-    with StepTimer(log, "ingest"):
-        for key in source_keys:
-            _, display_name = SOURCE_MAP[key]
-            log.info({"event": "remote_ingesting", "source": display_name, "host": host})
-            try:
-                resp = httpx.post(f"{base}/ingest/{key}", timeout=600)
-                resp.raise_for_status()
-                body = resp.json()
-                rows = body.get("rows", -1)
-                results[display_name] = rows
-                log.info({"event": "remote_ingested", "source": display_name, "rows": rows})
-
-                # Download the SQLite file
-                db_resp = httpx.get(f"{base}/data/{key}.sqlite", timeout=120)
-                db_resp.raise_for_status()
-                db_path = ROOT / "data" / f"{key}.sqlite"
-                db_path.write_bytes(db_resp.content)
-                log.info({"event": "db_downloaded", "source": key, "path": str(db_path), "bytes": len(db_resp.content)})
-            except httpx.HTTPStatusError as e:
-                log.error({"event": "remote_ingest_failed", "source": display_name, "error": str(e)})
-                results[display_name] = -1
-            except httpx.RequestError as e:
-                log.error({"event": "remote_unreachable", "source": display_name, "error": str(e)})
-                results[display_name] = -1
-
-    succeeded = sum(1 for v in results.values() if v >= 0)
-    record_done("ingest", total=len(results), succeeded=succeeded)
-    return results
-
-
 # ── Export ─────────────────────────────────────────────────────────────────────
 
 
@@ -268,8 +211,6 @@ def run_pipeline(
     skip_ingest: bool = False,
     sources: list[str] | None = None,
     skip_sources: list[str] | None = None,
-    remote_host: str | None = None,
-    remote_port: int = _REMOTE_PORT,
 ) -> None:
     """Run the full pipeline: ingest → export → splink → load.
 
@@ -277,10 +218,7 @@ def run_pipeline(
     """
     if not skip_ingest:
         log.info({"event": "pipeline_stage", "stage": "ingest"})
-        if remote_host:
-            run_remote_ingest(host=remote_host, port=remote_port, sources=sources, skip_sources=skip_sources)
-        else:
-            run_ingest(sources=sources, skip_sources=skip_sources)
+        run_ingest(sources=sources, skip_sources=skip_sources)
 
     log.info({"event": "pipeline_stage", "stage": "export"})
     total = run_export()

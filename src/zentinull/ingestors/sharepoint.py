@@ -5,6 +5,7 @@ Auto-detects columns from actual API response.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import requests
@@ -14,7 +15,7 @@ from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.sp")
 
-N8N_BASE = "http://192.168.20.56:5678/webhook"
+N8N_BASE = os.environ.get("SHAREPOINT_BASE_URL", "http://192.168.20.56:5678/webhook")
 
 ENDPOINTS = [
     "sp_devices",

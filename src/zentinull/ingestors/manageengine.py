@@ -17,8 +17,8 @@ from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.me")
 
-CLOUD_BASE = "https://endpointcentral.manageengine.com/api/1.4"
-MDM_BASE = "https://mdm.manageengine.com/api/v1/mdm"
+CLOUD_BASE = os.environ.get("ME_CLOUD_BASE_URL", "https://endpointcentral.manageengine.com/api/1.4")
+MDM_BASE = os.environ.get("ME_MDM_BASE_URL", "https://mdm.manageengine.com/api/v1/mdm")
 CLIENT_ID = os.environ.get("ME_CLIENT_ID", "1000.I2459W43UMXFIJJY19OVDPJJNFMEOM")
 CLIENT_SECRET = os.environ.get("ME_CLIENT_SECRET", "")
 OAUTH_FILE = os.environ.get("ME_OAUTH_FILE", "data/me_oauth.json")
