@@ -1,10 +1,14 @@
 """
-Pipeline orchestrator: ingest → export → entity resolution → DuckDB mesh.
+Legacy pipeline entry point — retains backward-compatible function signatures
+while delegating actual work to cli.pipeline internally.
 
 Usage:
     python pipeline.py              Full run: ingest + export + splink + load
     python pipeline.py --skip-ingest  Export + splink + load (data already fresh)
     python pipeline.py --dry-run      Print what would run
+
+New code should use ``from zentinull.cli.pipeline import run_pipeline``
+directly instead of importing from this module.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ log = get_logger("pipeline")
 
 
 def _run_step(step: str, args: list[str], timeout: int = 120) -> None:
-    """Run a subprocess step."""
+    """Run a subprocess step — legacy, kept for backward-compatible tests."""
     with StepTimer(log, step):
         result = subprocess.run(
             [PYTHON, *args],
@@ -40,7 +44,7 @@ def _run_step(step: str, args: list[str], timeout: int = 120) -> None:
 
 
 def _run_splink() -> None:
-    """Run entity resolution."""
+    """Run entity resolution — legacy, kept for backward-compatible tests."""
     script = ROOT / "scripts" / "run_splink.py"
     with StepTimer(log, "splink"):
         result = subprocess.run(
@@ -64,8 +68,13 @@ def _load_to_duckdb() -> None:
     run_load()
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Public API — new callers should use zentinull.cli.pipeline.run_pipeline()
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
 def run(*, skip_ingest: bool = False, dry_run: bool = False) -> None:
-    """Run the full pipeline."""
+    """Run the full pipeline — delegates through legacy functions for compat."""
     if dry_run:
         log.info({"event": "dry_run"})
         if not skip_ingest:

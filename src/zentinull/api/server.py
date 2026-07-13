@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..config import API_PORT, MESH_DB, _load_dotenv
+from ..config import API_HOST, API_PORT, MESH_DB, _load_dotenv
 from ..logging_config import get_logger, request_id_var, setup
 from .db import MeshDB
 from .metrics import metrics
@@ -91,7 +91,7 @@ if __name__ == "__main__":
 
     port = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[1] == "--port" else API_PORT
     reload = "--reload" in sys.argv
-    log.info({"event": "server_start", "url": f"http://0.0.0.0:{port}"})
-    log.info({"event": "server_start", "url": f"http://0.0.0.0:{port}/device-view?q=ws28", "desc": "device view"})
-    log.info({"event": "server_start", "url": f"http://0.0.0.0:{port}/docs", "desc": "docs"})
-    uvicorn.run("zentinull.api.server:app", host="0.0.0.0", port=port, reload=reload)
+    log.info({"event": "server_start", "url": f"http://{API_HOST}:{port}"})
+    log.info({"event": "server_start", "url": f"http://{API_HOST}:{port}/device-view?q=ws28", "desc": "device view"})
+    log.info({"event": "server_start", "url": f"http://{API_HOST}:{port}/docs", "desc": "docs"})
+    uvicorn.run("zentinull.api.server:app", host=API_HOST, port=port, reload=reload)

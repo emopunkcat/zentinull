@@ -32,8 +32,11 @@ def create_table(conn: sqlite3.Connection, name: str, columns: list[str], raw: b
             ingested_at TEXT DEFAULT (datetime('now'))
         )
     """
+    # Atomic swap: create in _tmp table, then drop old + rename
+    conn.execute(f"DROP TABLE IF EXISTS {name}_tmp")
+    conn.execute(sql.replace(f"CREATE TABLE IF NOT EXISTS {name}", f"CREATE TABLE {name}_tmp"))
     conn.execute(f"DROP TABLE IF EXISTS {name}")
-    conn.execute(sql)
+    conn.execute(f"ALTER TABLE {name}_tmp RENAME TO {name}")
     if not conn.in_transaction:
         conn.commit()
 

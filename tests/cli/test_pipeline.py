@@ -554,3 +554,243 @@ class TestRunPipeline:
         run_pipeline(sources=["sp", "fg"], skip_sources=["ad"])
         assert captured.get("sources") == ["sp", "fg"]
         assert captured.get("skip_sources") == ["ad"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# export_source
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestExportSource:
+    """export_source() exports a single source to its own CSV file."""
+
+    CSV_HEADER = (
+        "source,source_id,name,name_clean,serial_number,"
+        "mac_address,mac_clean,asset_tag,manufacturer,model,os,"
+        "os_version,assigned_user,ip_address,imei,extra_attributes"
+    )
+
+    def test_exports_single_source(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any) -> None:
+        """Exports only the specified source to a per-source CSV."""
+        import sqlite3
+
+        import zentinull.cli.pipeline as pipeline_mod
+
+        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        conn = sqlite3.connect(str(data_dir / "fg.sqlite"))
+        conn.execute(
+            "CREATE TABLE clients (id INTEGER PRIMARY KEY, mac TEXT, ip TEXT, hostname TEXT, manufacturer TEXT, model TEXT, os TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO clients VALUES (1, 'aa:bb:cc:dd:ee:ff', '10.0.0.1', 'ws28', 'Dell', 'Latitude', 'Windows')"
+        )
+        conn.commit()
+        conn.close()
+
+        from zentinull.cli.pipeline import export_source
+
+        count = export_source("fg")
+
+        assert count == 1
+        csv_path = tmp_path / "export" / "csv" / "fg.csv"
+        assert csv_path.exists()
+
+        import csv
+
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        assert len(rows) == 1
+        assert rows[0]["source"] == "fg"
+        assert rows[0]["name"] == "ws28"
+
+    def test_unknown_source_raises(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
+        """Raises ValueError for unknown source key."""
+        from zentinull.cli.pipeline import export_source
+
+        with pytest.raises(ValueError, match="Unknown source key"):
+            export_source("nonexistent")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# run_incremental_load
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRunIncrementalLoad:
+    """run_incremental_load() upserts per-source CSVs into DuckDB."""
+
+    CSV_HEADER = (
+        "source,source_id,name,name_clean,serial_number,"
+        "mac_address,mac_clean,asset_tag,manufacturer,model,os,"
+        "os_version,assigned_user,ip_address,imei,extra_attributes"
+    )
+
+    def _create_mesh(self, root: Path, records: list[str]) -> Path:
+        """Create a mesh.duckdb with source_records table."""
+        import duckdb
+
+        data_dir = root / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        mesh_path = data_dir / "mesh.duckdb"
+
+        conn = duckdb.connect(str(mesh_path))
+        conn.execute("""
+            CREATE TABLE source_records (
+                cluster_id VARCHAR, source VARCHAR, source_id VARCHAR,
+                name VARCHAR, name_clean VARCHAR, serial_number VARCHAR,
+                mac_address VARCHAR, mac_clean VARCHAR, asset_tag VARCHAR,
+                manufacturer VARCHAR, model VARCHAR, os VARCHAR,
+                os_version VARCHAR, assigned_user VARCHAR, ip_address VARCHAR,
+                imei VARCHAR, extra_attributes VARCHAR
+            )
+        """)
+        for rec in records:
+            cols = "cluster_id,source,source_id,name,name_clean,serial_number,mac_address,mac_clean,asset_tag,manufacturer,model,os,os_version,assigned_user,ip_address,imei,extra_attributes"
+            placeholders = ",".join(["?"] * 17)
+            conn.execute(f"INSERT INTO source_records ({cols}) VALUES ({placeholders})", rec.split(","))
+        conn.execute("CREATE TABLE devices AS SELECT * FROM source_records LIMIT 0")
+        conn.close()
+        return mesh_path
+
+    def _create_source_csv(self, root: Path, source_key: str, rows: list[str]) -> Path:
+        """Create a per-source CSV for import."""
+        import csv
+
+        csv_dir = root / "export" / "csv"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = csv_dir / f"{source_key}.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(self.CSV_HEADER.split(","))
+            for row in rows:
+                writer.writerow(row.split(","))
+        return csv_path
+
+    def test_upserts_new_records(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any) -> None:
+        """New records from CSV are inserted into source_records."""
+        import zentinull.cli.pipeline as pipeline_mod
+
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+
+        self._create_mesh(tmp_path, [])
+        self._create_source_csv(
+            tmp_path,
+            "fg",
+            ["fg,mac1,ws28,ws28,,aa:bb:cc:dd:ee:ff,,,,,,,10.0.0.1,,,vlan=100"],
+        )
+
+        from zentinull.cli.pipeline import run_incremental_load
+
+        run_incremental_load(["fg"])
+
+        import duckdb
+
+        conn = duckdb.connect(str(tmp_path / "data" / "mesh.duckdb"), read_only=True)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()
+            assert count[0] == 1
+            row = conn.execute("SELECT source, source_id, name FROM source_records").fetchone()
+            assert row[0] == "fg"
+            assert row[1] == "mac1"
+            assert row[2] == "ws28"
+        finally:
+            conn.close()
+
+    def test_updates_existing_records(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any
+    ) -> None:
+        """Existing records (same source + source_id) are updated, not duplicated."""
+        import zentinull.cli.pipeline as pipeline_mod
+
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+
+        self._create_mesh(
+            tmp_path,
+            ["cluster1,fg,mac1,ws28,ws28,,aa:bb:cc:dd:ee:ff,,,,,,,10.0.0.1,,,"],
+        )
+        self._create_source_csv(
+            tmp_path,
+            "fg",
+            ["fg,mac1,ws28-new,ws28-new,,aa:bb:cc:dd:ee:ff,,,,,,,,10.0.0.2,,,"],
+        )
+
+        from zentinull.cli.pipeline import run_incremental_load
+
+        run_incremental_load(["fg"])
+
+        import duckdb
+
+        conn = duckdb.connect(str(tmp_path / "data" / "mesh.duckdb"), read_only=True)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()
+            assert count[0] == 1
+            row = conn.execute("SELECT name, ip_address FROM source_records").fetchone()
+            assert row[0] == "ws28-new"
+            assert row[1] == "10.0.0.2"
+        finally:
+            conn.close()
+
+    def test_returns_zero_when_mesh_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any
+    ) -> None:
+        """When mesh.duckdb doesn't exist, returns 0 without error."""
+        import zentinull.cli.pipeline as pipeline_mod
+
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+
+        from zentinull.cli.pipeline import run_incremental_load
+
+        result = run_incremental_load(["fg"])
+        assert result == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# run_incremental_sync
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRunIncrementalSync:
+    """run_incremental_sync() orchestrates ingest → export → upsert for specific sources."""
+
+    def test_calls_ingest_and_export(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
+        """Runs ingest for specified sources, exports each, then upserts."""
+        import zentinull.cli.pipeline as pipeline_mod
+
+        calls: list[str] = []
+        monkeypatch.setattr(
+            pipeline_mod,
+            "run_ingest",
+            lambda sources=None: calls.append(f"ingest:{sources}") or {},
+        )
+        monkeypatch.setattr(
+            pipeline_mod,
+            "export_source",
+            lambda s: calls.append(f"export:{s}") or 0,
+        )
+        monkeypatch.setattr(
+            pipeline_mod,
+            "run_incremental_load",
+            lambda s: calls.append(f"load:{s}") or 0,
+        )
+        fake_mesh = Path("/tmp/fake/mesh.duckdb")
+        fake_mesh.parent.mkdir(parents=True, exist_ok=True)
+        fake_mesh.touch()
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", fake_mesh)
+
+        from zentinull.cli.pipeline import run_incremental_sync
+
+        run_incremental_sync(["fg", "zbx"])
+
+        assert "ingest:['fg', 'zbx']" in calls
+        assert "export:fg" in calls
+        assert "export:zbx" in calls
+        assert "load:['fg', 'zbx']" in calls

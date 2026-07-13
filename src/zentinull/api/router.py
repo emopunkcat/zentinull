@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -19,6 +21,9 @@ from .models import (
 
 log = get_logger("api.router")
 router = APIRouter()
+
+# Single-worker executor: the pipeline holds a PID lock, so only one run at a time.
+_pipeline_executor = ThreadPoolExecutor(max_workers=1)
 
 
 @router.get("/health")
@@ -48,6 +53,30 @@ def _db(request: Request) -> MeshDB:
     if db is None:
         raise HTTPException(503, "Mesh database not loaded — run pipeline.py first")
     return db
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pipeline Control
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/pipeline/run")
+async def run_pipeline_endpoint(
+    skip_ingest: bool = False,
+    sources: str = "",
+) -> dict[str, Any]:
+    """Trigger a full pipeline run in a background thread and return immediately."""
+    from ..cli.pipeline import run_pipeline
+
+    source_list = [s.strip() for s in sources.split(",") if s.strip()] if sources else None
+    log.info({"event": "request", "endpoint": "/pipeline/run", "skip_ingest": skip_ingest, "sources": source_list})
+
+    def _run() -> None:
+        run_pipeline(skip_ingest=skip_ingest, sources=source_list)
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(_pipeline_executor, _run)
+    return {"status": "started", "message": "Pipeline triggered"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

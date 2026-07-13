@@ -12,6 +12,27 @@ from zentinull.api.schema import DEVICES_SQL
 from zentinull.contracts import SPLINK_FIELDS
 
 
+def test_export_field_map_covers_splink_fields() -> None:
+    """Verify that export FIELD_MAP maps to all core SPLINK_FIELDS."""
+    from zentinull.export_for_splink import FIELD_MAP
+
+    mapped: set[str] = set()
+    for _table_key, mapping in FIELD_MAP.items():
+        mapped.update(mapping.values())
+
+    core_fields = {"serial_number", "mac_address", "manufacturer", "model", "os", "assigned_user", "ip_address"}
+    missing = [f for f in core_fields if f not in mapped]
+    assert not missing, f"Core fields missing from FIELD_MAP: {missing}"
+
+
+def test_devices_sql_uses_contract_columns() -> None:
+    """Verify that DEVICES_SQL references SPLINK_FIELDS columns."""
+    for field in SPLINK_FIELDS:
+        if field in ("source", "source_id", "extra_attributes"):
+            continue  # per-record fields not meaningful in consolidated devices table
+        assert field in DEVICES_SQL, f"DEVICES_SQL does not reference contract field: {field}"
+
+
 def test_source_record_covers_splink_fields() -> None:
     """Verify that the SourceRecord Pydantic model declares all unified Splink fields."""
     model_fields = set(SourceRecord.model_fields.keys())

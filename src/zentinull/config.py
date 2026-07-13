@@ -61,6 +61,9 @@ LOG_STYLE: str = os.environ.get("ZENTINULL_LOG_STYLE", "pretty")
 LOG_RULES: str = os.environ.get("ZENTINULL_LOG_RULES", "")
 LOG_SHOW: str = os.environ.get("ZENTINULL_LOG_SHOW", "all")
 LOG_FORMATS: str = os.environ.get("ZENTINULL_LOG_FORMATS", "")
+LOG_COMPACT_WIDTH: str = os.environ.get("ZENTINULL_LOG_COMPACT_WIDTH", "48")
+LOG_COLUMN_MAP: str = os.environ.get("ZENTINULL_LOG_COLUMN_MAP", "")
+LOG_COMPACT_FORMATS: str = os.environ.get("ZENTINULL_LOG_COMPACT_FORMATS", "")
 
 # ── Ingestor auth: Active Directory ───────────────────────────────────────────
 AD_SERVER: str = os.environ.get("AD_SERVER", "ldap://dc.example.com:389")

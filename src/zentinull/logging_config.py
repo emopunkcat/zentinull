@@ -23,6 +23,13 @@ from pathlib import Path
 from typing import Any
 
 
+def _cfg_attr(name: str, default: str = "") -> str:
+    """Lazy import config to avoid circular import at module level."""
+    from . import config as _cfg
+
+    return getattr(_cfg, name, default)
+
+
 class StructuredFormatter(logging.Formatter):
     """Key=value structured output — human-readable, grep-friendly.
 
@@ -717,7 +724,7 @@ class ColumnarFormatter(logging.Formatter):
         self._color = use_colors if use_colors is not None else _stdout_is_tty()
         self._column_map = self._load_column_map()
         self._format_rules = self._load_compact_formats()
-        raw_w = os.environ.get("ZENTINULL_LOG_COMPACT_WIDTH", "")
+        raw_w = os.environ.get("ZENTINULL_LOG_COMPACT_WIDTH", _cfg_attr("LOG_COMPACT_WIDTH", ""))
         try:
             w = int(raw_w)
         except (ValueError, TypeError):
@@ -731,7 +738,7 @@ class ColumnarFormatter(logging.Formatter):
     # ── Key abbreviation map ───────────────────────────────────────────────
 
     def _load_column_map(self) -> dict[str, str]:
-        raw = os.environ.get("ZENTINULL_LOG_COLUMN_MAP", "")
+        raw = os.environ.get("ZENTINULL_LOG_COLUMN_MAP", _cfg_attr("LOG_COLUMN_MAP", ""))
         mapping = dict(self._DEFAULT_COLUMN_MAP)
         if not raw:
             return mapping
@@ -778,7 +785,7 @@ class ColumnarFormatter(logging.Formatter):
     # ── Compact format template engine ─────────────────────────────────────
 
     def _load_compact_formats(self) -> list[tuple[re.Pattern[str], str]]:
-        raw = os.environ.get("ZENTINULL_LOG_COMPACT_FORMATS", "")
+        raw = os.environ.get("ZENTINULL_LOG_COMPACT_FORMATS", _cfg_attr("LOG_COMPACT_FORMATS", ""))
         if not raw:
             return [(re.compile(p, re.I), t) for p, t in self._DEFAULT_COMPACT_FORMATS]
 

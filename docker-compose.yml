@@ -56,6 +56,10 @@ services:
       - ./data:/app/data
       - ./src:/app/src
       - ./scripts:/app/scripts
+    environment:
+      # Dashboard only needs the API URL — pipeline runs are triggered via the
+      # API, so no source auth credentials (env_file) are required here.
+      - DASHBOARD_API_URL=http://api:8001
     profiles:
       - all
     depends_on:
@@ -81,3 +85,21 @@ services:
       - ./data:/app/data
       - ./scripts:/app/scripts
     command: ["python3", "scripts/seed_demo_data.py", "-f"]
+
+  worker:
+    build:
+      context: .
+      target: dev
+    image: zentinull:dev
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./export:/app/export
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+    env_file: .env
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["python3", "-m", "zentinull.worker"]

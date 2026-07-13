@@ -47,3 +47,20 @@ def test_insert_raw_empty_returns_zero(inmemory_db):
 
     n = insert_raw(inmemory_db, "t", [])
     assert n == 0
+
+
+def test_create_table_atomic_swap_clears_data_and_no_tmp_leak(inmemory_db):
+    """create_table uses temp-table swap: old data cleared, no _tmp table left."""
+    from zentinull.ingestors.base import create_table, insert
+
+    create_table(inmemory_db, "t", ["name"])
+    insert(inmemory_db, "t", [{"name": "a"}, {"name": "b"}])
+    assert inmemory_db.execute("SELECT count(*) FROM t").fetchone()[0] == 2
+
+    # Recreate — triggers temp-table + atomic rename
+    create_table(inmemory_db, "t", ["name"])
+    assert inmemory_db.execute("SELECT count(*) FROM t").fetchone()[0] == 0
+
+    # Verify the _tmp table was cleaned up (no leak)
+    tables = inmemory_db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='t_tmp'").fetchall()
+    assert len(tables) == 0

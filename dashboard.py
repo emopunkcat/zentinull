@@ -83,39 +83,19 @@ def _search_devices(query: str, limit: int = 50) -> list[dict[str, Any]]:
 
 
 def _run_serve(args: list[str]) -> SimpleNamespace:
-    """Run a pipeline command — direct import when possible, subprocess fallback."""
-    try:
-        from zentinull.cli.pipeline import (
-            run_export as _run_export_local,
-        )
-        from zentinull.cli.pipeline import (
-            run_ingest as _run_ingest_local,
-        )
-        from zentinull.cli.pipeline import (
-            run_load as _run_load_local,
-        )
-        from zentinull.cli.pipeline import (
-            run_pipeline,
-        )
-        from zentinull.cli.pipeline import (
-            run_splink as _run_splink_local,
-        )
-
-        func_map: dict[tuple[str, ...], Any] = {
-            ("pipeline",): run_pipeline,
-            ("ingest",): _run_ingest_local,
-            ("export",): _run_export_local,
-            ("splink",): _run_splink_local,
-            ("load",): _run_load_local,
-        }
-
-        key = tuple(args)
-        func = func_map.get(key)
-        if func:
-            func()
-            return SimpleNamespace(returncode=0, stderr="", stdout="", args=args)
-    except ImportError:
-        logging.warning("zentinull not installed directly, falling back to subprocess for pipeline commands")
+    """Trigger the pipeline via the API; individual stages fall back to the serve CLI."""
+    if args == ["pipeline"]:
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(f"{_API_BASE}/pipeline/run")
+                resp.raise_for_status()
+            return SimpleNamespace(returncode=0, stderr="", stdout=resp.text, args=args)
+        except httpx.RequestError as e:
+            logging.exception("Pipeline API request failed")
+            return SimpleNamespace(returncode=1, stderr=str(e), stdout="", args=args)
+        except httpx.HTTPStatusError as e:
+            logging.exception("Pipeline API returned error status")
+            return SimpleNamespace(returncode=1, stderr=str(e), stdout="", args=args)
 
     result = subprocess.run(
         [sys.executable, str(_HERE / "serve.py"), *args],
@@ -136,14 +116,14 @@ with st.sidebar:
     st.subheader(":material/rocket_launch: Pipeline controls")
 
     if st.button(":material/refresh: Run full pipeline", use_container_width=True):
-        with st.spinner("Running full pipeline..."):
+        with st.spinner("Triggering pipeline..."):
             result = _run_serve(["pipeline"])
             if result.returncode == 0:
-                st.success("Pipeline completed")
+                st.success("Pipeline triggered — running in the background")
                 _load_status.clear()
                 _load_mesh_data.clear()
             else:
-                st.error(f"Pipeline failed: {result.stderr[-500:]}")
+                st.error(f"Pipeline trigger failed: {result.stderr[-500:]}")
 
     col1, col2 = st.columns(2)
     with col1:
