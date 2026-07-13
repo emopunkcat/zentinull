@@ -91,7 +91,10 @@ class TestOAuth2RefreshAuth:
 
             written = json.loads(token_path.read_text())
             assert written["access_token"] == "tok"
-            assert written["expires_in"] == 3600
+            now = time.time()
+            expected_expiry = now + 3600 - 60
+            assert abs(written["expires_at"] - expected_expiry) < 5
+            assert written["token_type"] == "Bearer"
         finally:
             token_path.unlink(missing_ok=True)
 

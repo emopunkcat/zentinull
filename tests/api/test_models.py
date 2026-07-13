@@ -20,11 +20,14 @@ def test_source_record_defaults():
     assert rec.source_id == ""
 
 
-def test_source_record_with_raw():
-    from zentinull.api.models import SourceRecordWithRaw
+def test_source_record_extra_attributes():
+    from zentinull.api.models import SourceRecord
 
-    rec = SourceRecordWithRaw(source="sp", raw_json={"key": "val"})
-    assert rec.raw_json == {"key": "val"}
+    rec = SourceRecord(source="sp", extra_attributes={"ssid": "corp-wifi", "vlan": "100"})
+    assert rec.extra_attributes == {"ssid": "corp-wifi", "vlan": "100"}
+    # Default is empty dict
+    rec2 = SourceRecord(source="fg")
+    assert rec2.extra_attributes == {}
 
 
 def test_cluster_info_roundtrip():

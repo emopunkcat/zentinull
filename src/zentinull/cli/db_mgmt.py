@@ -12,11 +12,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from ..config import DATA_DIR
 from ..logging_config import get_logger
 
 log = get_logger("cli.db_mgmt")
-ROOT = Path(__file__).resolve().parent.parent.parent.parent
-DATA_DIR = ROOT / "data"
 
 
 def _fmt_size(bytes_: int) -> str:

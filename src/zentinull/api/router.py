@@ -9,15 +9,38 @@ from fastapi.responses import HTMLResponse
 
 from ..logging_config import get_logger
 from .db import MeshDB
+from .models import (
+    AnomaliesReport,
+    ClusterInfo,
+    DashboardStats,
+    DeviceStory,
+    MeshStats,
+)
 
 log = get_logger("api.router")
 router = APIRouter()
 
 
 @router.get("/health")
-async def health() -> dict[str, str]:
-    """Health check — always returns 200 with status."""
-    return {"status": "ok"}
+async def health(request: Request) -> dict[str, str]:
+    """Health check with dependency verification."""
+    status: dict[str, str] = {"status": "ok"}
+
+    db = request.app.state.db if hasattr(request.app.state, "db") else None
+    if db is None:
+        status["mesh_db"] = "unavailable"
+        status["mesh_file"] = "missing"
+        status["status"] = "degraded"
+    else:
+        if db.ping():
+            status["mesh_db"] = "connected"
+            status["mesh_file"] = "present"
+        else:
+            status["mesh_db"] = "error"
+            status["mesh_file"] = "missing"
+            status["status"] = "degraded"
+
+    return status
 
 
 def _db(request: Request) -> MeshDB:
@@ -32,7 +55,7 @@ def _db(request: Request) -> MeshDB:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@router.get("/device/{query}")
+@router.get("/device/{query}", response_model=DeviceStory)
 async def device(query: str, request: Request) -> dict[str, Any]:
     """
     Device lookup by any identifier — name, serial, MAC, IP, user.
@@ -46,7 +69,7 @@ async def device(query: str, request: Request) -> dict[str, Any]:
     return result.model_dump()
 
 
-@router.post("/batch")
+@router.post("/batch", response_model=list[DeviceStory | None])
 async def batch(request: Request) -> list[dict[str, Any] | None]:
     """
     Resolve multiple device queries in a single connection.
@@ -67,9 +90,7 @@ async def batch(request: Request) -> list[dict[str, Any] | None]:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Search
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-@router.get("/search")
+@router.get("/search", response_model=list[ClusterInfo])
 async def search(
     request: Request,
     q: str = Query(..., min_length=1),
@@ -93,21 +114,21 @@ async def search(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@router.get("/dashboard")
+@router.get("/dashboard", response_model=DashboardStats)
 async def dashboard(request: Request) -> dict[str, Any]:
     """KPI dashboard — counts, coverage, top clusters."""
     log.info({"event": "request", "endpoint": "/dashboard"})
     return _db(request).dashboard()
 
 
-@router.get("/mesh")
+@router.get("/mesh", response_model=MeshStats)
 async def mesh(request: Request) -> dict[str, Any]:
     """Cross-source cluster statistics."""
     log.info({"event": "request", "endpoint": "/mesh"})
     return _db(request).mesh_stats()
 
 
-@router.get("/clusters")
+@router.get("/clusters", response_model=dict[str, Any])
 async def list_clusters(
     request: Request,
     min_sources: int = 1,
@@ -122,7 +143,7 @@ async def list_clusters(
     return {"total": total, "offset": offset, "items": [i.model_dump() for i in items]}
 
 
-@router.get("/anomalies")
+@router.get("/anomalies", response_model=AnomaliesReport)
 async def anomalies(request: Request) -> dict[str, Any]:
     """Singletons, unnamed devices, missing serials."""
     log.info({"event": "request", "endpoint": "/anomalies"})
@@ -293,7 +314,7 @@ for(const[k,vals]of Object.entries(d.consolidated)){if(!vals.length)continue;con
 h+='</div>';let grid=document.getElementById('grid');grid.innerHTML=h;
 for(const rec of d.records){
 let c='<div class="card"><h2><span class="source-tag src-'+rec.source+'">'+rec.source+'</span> '+(rec.name||rec.source_id||'(unnamed)')+'</h2>';
-for(const f of['source_id','name','serial_number','mac_address','mac_clean','manufacturer','model','os','assigned_user','ip_address','imei']){if(rec[f])c+='<div class="kv"><span class="key">'+f+'</span><span class="val">'+rec[f]+'</span></div>'}
+for(const f of['source_id','name','serial_number','mac_address','mac_clean','manufacturer','model','os','os_version','assigned_user','ip_address','imei','asset_tag']){if(rec[f])c+='<div class="kv"><span class="key">'+f+'</span><span class="val">'+rec[f]+'</span></div>'}
 c+='</div>';grid.innerHTML+=c}
 })();
 </script>
@@ -305,3 +326,11 @@ c+='</div>';grid.innerHTML+=c}
 async def device_view(_q: str = "ws28") -> HTMLResponse:
     """HTML device dashboard. /device-view?q=ws28"""
     return HTMLResponse(_DEVICE_VIEW_HTML)
+
+
+@router.get("/metrics")
+async def metrics_endpoint() -> str:
+    """Prometheus metrics in text format."""
+    from .metrics import metrics
+
+    return metrics.generate()

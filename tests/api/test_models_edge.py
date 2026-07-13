@@ -21,20 +21,21 @@ def test_source_record_all_empty_defaults():
     assert rec.imei == ""
 
 
-def test_source_record_with_raw_none():
-    from zentinull.api.models import SourceRecordWithRaw
+def test_source_record_extra_attributes_empty_default():
+    from zentinull.api.models import SourceRecord
 
-    rec = SourceRecordWithRaw(source="sp", raw_json=None)
-    assert rec.raw_json is None
-
-
-def test_source_record_with_raw_dict():
-    from zentinull.api.models import SourceRecordWithRaw
-
-    rec = SourceRecordWithRaw(source="sp", raw_json={"a": 1})
-    assert rec.raw_json == {"a": 1}
+    rec = SourceRecord(source="x")
+    assert rec.extra_attributes == {}
     d = rec.model_dump()
-    assert d["raw_json"] == {"a": 1}
+    assert d["extra_attributes"] == {}
+
+
+def test_source_record_extra_attributes_roundtrip():
+    from zentinull.api.models import SourceRecord
+
+    rec = SourceRecord(source="sp", extra_attributes={"a": 1, "b": "hello"})
+    d = rec.model_dump()
+    assert d["extra_attributes"] == {"a": 1, "b": "hello"}
 
 
 def test_cluster_info_sources_with_items():

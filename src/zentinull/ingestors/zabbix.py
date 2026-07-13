@@ -5,18 +5,15 @@ Zabbix ingest: hosts + items via JSON-RPC.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import requests
 
+from ..config import ZBX_TOKEN, ZBX_URL
 from ..logging_config import get_logger
 from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.zbx")
-
-ZBX_URL = os.environ.get("ZBX_URL", "https://zabbix.example.com/api_jsonrpc.php")
-ZBX_TOKEN = os.environ.get("ZBX_TOKEN", "")
 
 
 def _zbx_call(method: str, params: dict[str, Any]) -> Any:
@@ -27,7 +24,7 @@ def _zbx_call(method: str, params: dict[str, Any]) -> Any:
         "auth": ZBX_TOKEN,
         "id": 1,
     }
-    r = requests.post(ZBX_URL, json=payload, timeout=30)
+    r = requests.post(ZBX_URL, json=payload, timeout=(10, 30))
     r.raise_for_status()
     resp = r.json()
     if "error" in resp:
@@ -108,9 +105,10 @@ def ingest() -> int:
     )
     if items:
         records, columns = _transform_hosts(items)
-        conn.execute("DROP TABLE IF EXISTS hosts")
-        create_table(conn, "hosts", columns)
-        n = insert_raw(conn, "hosts", records)
+        with conn:
+            conn.execute("DROP TABLE IF EXISTS hosts")
+            create_table(conn, "hosts", columns)
+            n = insert_raw(conn, "hosts", records)
         log.info({"event": "inserted", "source": "zbx", "table": "hosts", "rows": n})
         total += n
 

@@ -7,16 +7,20 @@ Usage:
 
 from __future__ import annotations
 
+import logging
+import os
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import streamlit as st
 
 _HERE = Path(__file__).resolve().parent
-_MESH_DB = _HERE / "data" / "mesh.duckdb"
+_API_BASE = os.environ.get("DASHBOARD_API_URL", "http://localhost:8001")
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -40,123 +44,91 @@ def _load_status() -> dict[str, Any]:
 
 @st.cache_resource(ttl=30)
 def _load_mesh_data() -> dict[str, Any] | None:
-    """Load mesh stats directly from DuckDB."""
-    if not _MESH_DB.exists():
-        return None
-
+    """Load mesh stats via API."""
     try:
-        import duckdb
-
-        conn = duckdb.connect(str(_MESH_DB), read_only=True)
-        try:
-            clusters = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
-            records = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()[0]
-            multi = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count > 1").fetchone()[0]
-            singles = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()[0]
-
-            # Per-source record counts
-            src_rows = conn.execute(
-                "SELECT source, COUNT(*) AS n FROM source_records GROUP BY source ORDER BY n DESC"
-            ).fetchall()
-            sources = {r[0]: r[1] for r in src_rows}
-
-            # Coverage
-            coverage = {}
-            for field, label in [
-                ("serial_number", "serial"),
-                ("mac_address", "mac"),
-                ("device_name", "name"),
-                ("assigned_user", "assigned_user"),
-            ]:
-                n = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {field} != ''").fetchone()[0]
-                pct = 100 * n // max(clusters, 1)
-                coverage[label] = f"{n}/{clusters} ({pct}%)"
-
-            # Source-count distribution
-            sc_rows = conn.execute(
-                "SELECT source_count, COUNT(*) FROM devices GROUP BY source_count ORDER BY source_count"
-            ).fetchall()
-            sc_dist = {str(r[0]): r[1] for r in sc_rows}
-
-            # Top source combos
-            combo_rows = conn.execute(
-                """
-                SELECT list_sort(sources)::VARCHAR AS combo, COUNT(*) AS n
-                FROM devices GROUP BY combo ORDER BY n DESC LIMIT 10
-                """
-            ).fetchall()
-            combos = {r[0]: r[1] for r in combo_rows}
-
-            return {
-                "clusters": clusters,
-                "records": records,
-                "multi_source": multi,
-                "singletons": singles,
-                "sources": sources,
-                "coverage": coverage,
-                "source_count_dist": sc_dist,
-                "source_combos": combos,
-            }
-        finally:
-            conn.close()
-    except Exception:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(f"{_API_BASE}/dashboard")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.RequestError:
+        logging.exception("Dashboard API request failed")
+        return None
+    except httpx.HTTPStatusError:
+        logging.exception("Dashboard API returned error status")
         return None
 
 
 @st.cache_data(ttl=10, show_spinner=False)
 def _search_devices(query: str, limit: int = 50) -> list[dict[str, Any]]:
-    """Search devices in DuckDB by name, serial, MAC, IP, or user."""
-    if not query or not _MESH_DB.exists():
+    """Search devices via API."""
+    if not query:
         return []
-
-    import duckdb
-
-    conn = duckdb.connect(str(_MESH_DB), read_only=True)
     try:
-        ql = f"%{query.lower()}%"
-        rows = conn.execute(
-            """
-            SELECT cluster_id, device_name, source_count, sources, serial_number,
-                   mac_address, manufacturer, model, os, assigned_user, ip_address, record_count
-            FROM devices
-            WHERE lower(device_name) LIKE ? OR lower(serial_number) LIKE ?
-               OR lower(mac_address) LIKE ? OR lower(ip_address) LIKE ?
-               OR lower(assigned_user) LIKE ? OR lower(manufacturer) LIKE ?
-            ORDER BY source_count DESC
-            LIMIT ?
-            """,
-            [ql, ql, ql, ql, ql, ql, limit],
-        ).fetchall()
-        cols = [
-            "cluster_id",
-            "device_name",
-            "source_count",
-            "sources",
-            "serial_number",
-            "mac_address",
-            "manufacturer",
-            "model",
-            "os",
-            "assigned_user",
-            "ip_address",
-            "record_count",
-        ]
-        return [dict(zip(cols, r, strict=True)) for r in rows]
-    finally:
-        conn.close()
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                f"{_API_BASE}/search",
+                params={"q": query, "limit": limit},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.RequestError:
+        logging.exception("Search API request failed")
+        return []
+    except httpx.HTTPStatusError:
+        logging.exception("Search API returned error status")
+        return []
 
 
 # ── Sidebar: Pipeline controls ─────────────────────────────────────────────────
 
 
-def _run_serve(args: list[str]) -> subprocess.CompletedProcess:
-    """Run a serve.py command and return the result."""
-    return subprocess.run(
+def _run_serve(args: list[str]) -> SimpleNamespace:
+    """Run a pipeline command — direct import when possible, subprocess fallback."""
+    try:
+        from zentinull.cli.pipeline import (
+            run_export as _run_export_local,
+        )
+        from zentinull.cli.pipeline import (
+            run_ingest as _run_ingest_local,
+        )
+        from zentinull.cli.pipeline import (
+            run_load as _run_load_local,
+        )
+        from zentinull.cli.pipeline import (
+            run_pipeline,
+        )
+        from zentinull.cli.pipeline import (
+            run_splink as _run_splink_local,
+        )
+
+        func_map: dict[tuple[str, ...], Any] = {
+            ("pipeline",): run_pipeline,
+            ("ingest",): _run_ingest_local,
+            ("export",): _run_export_local,
+            ("splink",): _run_splink_local,
+            ("load",): _run_load_local,
+        }
+
+        key = tuple(args)
+        func = func_map.get(key)
+        if func:
+            func()
+            return SimpleNamespace(returncode=0, stderr="", stdout="", args=args)
+    except ImportError:
+        logging.warning("zentinull not installed directly, falling back to subprocess for pipeline commands")
+
+    result = subprocess.run(
         [sys.executable, str(_HERE / "serve.py"), *args],
         cwd=str(_HERE),
         capture_output=True,
         text=True,
         timeout=600,
+    )
+    return SimpleNamespace(
+        returncode=result.returncode,
+        stderr=result.stderr,
+        stdout=result.stdout,
+        args=args,
     )
 
 
@@ -340,10 +312,7 @@ if mesh:
             st.dataframe(combo_rows, use_container_width=True, hide_index=True)
 
 else:
-    if _MESH_DB.exists():
-        st.warning("Could not read mesh data. Check DuckDB file.")
-    else:
-        st.info("No mesh data yet. Run `python serve.py pipeline` to build the mesh.")
+    st.info("No mesh data yet. Run the pipeline to build the mesh.")
 
 
 # ── Cluster explorer ───────────────────────────────────────────────────────────

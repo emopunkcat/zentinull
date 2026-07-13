@@ -84,9 +84,11 @@ def _create_seeded_db(path: Path) -> None:
             manufacturer TEXT DEFAULT '',
             model TEXT DEFAULT '',
             os TEXT DEFAULT '',
+            os_version TEXT DEFAULT '',
             assigned_user TEXT DEFAULT '',
             ip_address TEXT DEFAULT '',
-            imei TEXT DEFAULT ''
+            imei TEXT DEFAULT '',
+            asset_tag TEXT DEFAULT ''
         )
     """)
 
@@ -103,8 +105,10 @@ def _create_seeded_db(path: Path) -> None:
             "Dell",
             "OptiPlex 7080",
             "Windows 10",
+            "",
             "jdoe",
             "192.168.1.100",
+            "",
             "",
         ),
         (
@@ -119,11 +123,13 @@ def _create_seeded_db(path: Path) -> None:
             "Dell",
             "OptiPlex 7080",
             "Windows 10",
+            "",
             "jdoe",
             "",
             "",
+            "",
         ),
-        ("c1", "fg", "fg_7", "ws28", "ws28", "", "", "", "", "", "Windows 10", "", "192.168.1.100", ""),
+        ("c1", "fg", "fg_7", "ws28", "ws28", "", "", "", "", "", "Windows 10", "", "", "192.168.1.100", "", ""),
         (
             "c2",
             "ad",
@@ -137,11 +143,13 @@ def _create_seeded_db(path: Path) -> None:
             "",
             "Server 2022",
             "",
+            "",
             "10.0.0.1",
             "",
+            "",
         ),
-        ("c2", "zbx", "zbx_3", "dc01", "dc01", "SN002", "", "", "", "", "", "", "10.0.0.1", ""),
-        ("c3", "sp", "sp_99", "", "", "", "", "", "", "", "", "", "", ""),
+        ("c2", "zbx", "zbx_3", "dc01", "dc01", "SN002", "", "", "", "", "", "", "", "", "10.0.0.1", ""),
+        ("c3", "sp", "sp_99", "", "", "", "", "", "", "", "", "", "", "", "", ""),
         (
             "c4",
             "me_mdm",
@@ -154,14 +162,16 @@ def _create_seeded_db(path: Path) -> None:
             "Apple",
             "iPhone 15",
             "iOS 17",
+            "",
             "jsmith",
             "",
             "356789012345678",
+            "",
         ),
     ]
     for row in src_rows:
         conn.execute(
-            "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             row,
         )
 

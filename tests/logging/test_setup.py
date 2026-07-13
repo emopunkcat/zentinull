@@ -9,8 +9,8 @@ import zentinull.logging_config as lc
 
 def _reset_state() -> None:
     """Reset module-level state and clean up handlers between tests."""
-    lc._initialized = False
     lc._loggers.clear()
+    lc._configured = False
     root = logging.getLogger("zig")
     root.handlers.clear()
     root.propagate = True
@@ -55,6 +55,38 @@ def test_setup_custom_level() -> None:
     _reset_state()
 
 
+def test_setup_columnar_style() -> None:
+    """ZENTINULL_LOG_STYLE=columnar selects ColumnarFormatter."""
+    import os as _os
+
+    _reset_state()
+    _os.environ["ZENTINULL_LOG_STYLE"] = "columnar"
+    try:
+        lc.setup()
+        root = logging.getLogger("zig")
+        col_handlers = [h for h in root.handlers if isinstance(h.formatter, lc.ColumnarFormatter)]
+        assert len(col_handlers) >= 1
+    finally:
+        del _os.environ["ZENTINULL_LOG_STYLE"]
+        _reset_state()
+
+
+def test_setup_columns_style_alias() -> None:
+    """ZENTINULL_LOG_STYLE=columns also selects ColumnarFormatter."""
+    import os as _os
+
+    _reset_state()
+    _os.environ["ZENTINULL_LOG_STYLE"] = "columns"
+    try:
+        lc.setup()
+        root = logging.getLogger("zig")
+        col_handlers = [h for h in root.handlers if isinstance(h.formatter, lc.ColumnarFormatter)]
+        assert len(col_handlers) >= 1
+    finally:
+        del _os.environ["ZENTINULL_LOG_STYLE"]
+        _reset_state()
+
+
 # ── get_logger() tests ─────────────────────────────────────────────────────────
 
 
@@ -63,8 +95,6 @@ def test_get_logger_auto_setup() -> None:
     lc.get_logger("test")
     root = logging.getLogger("zig")
     assert len(root.handlers) >= 1
-    assert lc._initialized is True
-    _reset_state()
 
 
 def test_get_logger_caching() -> None:
@@ -77,7 +107,6 @@ def test_get_logger_caching() -> None:
 
 def test_get_logger_name_prefix() -> None:
     _reset_state()
-    lc._initialized = True  # skip auto-setup
     logger = lc.get_logger("foo")
     assert logger.name == "zig.foo"
     _reset_state()

@@ -28,6 +28,18 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 
+# ── Load .env before any zentinull imports ──────────────────────────────────
+# Config module reads os.environ at import time, so .env MUST be loaded first.
+_dotenv_path = _HERE / ".env"
+if _dotenv_path.exists():
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(_dotenv_path)
+    except ImportError:
+        # python-dotenv not installed — env vars must be exported manually
+        pass
+
 
 def _setup_logging(json_output: bool = False) -> None:
     from zentinull.logging_config import setup

@@ -494,13 +494,14 @@ class TestRowToClusterInfoEdgeCases:
                 CREATE TABLE devices (
                     cluster_id TEXT, device_name TEXT, source_count BIGINT,
                     sources TEXT, serial_number TEXT, mac_address TEXT,
-                    manufacturer TEXT, model TEXT, os TEXT, assigned_user TEXT,
+                    manufacturer TEXT, model TEXT, os TEXT, os_version TEXT,
+                    asset_tag TEXT, assigned_user TEXT,
                     ip_address TEXT, imei TEXT, record_count BIGINT
                 )
             """)
             conn.execute("""
                 INSERT INTO devices VALUES ('c99', 'test-device', 2,
-                    '[sp, me]', 'SN999', '', 'Dell', '', '', '', '', '', 2)
+                    '[sp, me]', 'SN999', '', 'Dell', '', '', '', '', '', '', '', 2)
             """)
         finally:
             conn.close()

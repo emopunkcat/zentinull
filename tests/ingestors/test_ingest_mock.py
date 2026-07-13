@@ -370,8 +370,8 @@ class TestManageEngineHelper:
 
     def test_me_auth_creates_oauth(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """_me_auth() creates an OAuth2RefreshAuth with correct params."""
-        monkeypatch.setenv("ME_CLIENT_ID", "test-client")
-        monkeypatch.setenv("ME_CLIENT_SECRET", "test-secret")
+        monkeypatch.setattr("zentinull.config.ME_CLIENT_ID", "")
+        monkeypatch.setattr("zentinull.config.ME_CLIENT_SECRET", "test-secret")
         monkeypatch.setenv("ME_OAUTH_FILE", "/tmp/test_oauth.json")
 
         import importlib
@@ -382,7 +382,7 @@ class TestManageEngineHelper:
 
         auth = me_mod._me_auth()
         assert auth._token_url == "https://accounts.zoho.com/oauth/v2/token"
-        assert auth._client_id == "test-client"
+        assert auth._client_id == ""
         assert auth._client_secret == "test-secret"
 
     def test_me_fetch_paginates(self) -> None:

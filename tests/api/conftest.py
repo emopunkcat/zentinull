@@ -47,12 +47,14 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             manufacturer TEXT DEFAULT '',
             model TEXT DEFAULT '',
             os TEXT DEFAULT '',
+            os_version TEXT DEFAULT '',
+            asset_tag TEXT DEFAULT '',
             assigned_user TEXT DEFAULT '',
             ip_address TEXT DEFAULT '',
-            imei TEXT DEFAULT ''
+            imei TEXT DEFAULT '',
+            extra_attributes TEXT DEFAULT ''
         )
     """)
-
     source_records_data: list[tuple] = [
         # c1: ws28 — 3 sources (sp, me, fg)
         (
@@ -67,8 +69,11 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "Dell",
             "OptiPlex 7080",
             "Windows 10",
+            "",
+            "",
             "jdoe",
             "192.168.1.100",
+            "",
             "",
         ),
         (
@@ -83,11 +88,14 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "Dell",
             "OptiPlex 7080",
             "Windows 10",
+            "",
+            "",
             "jdoe",
             "",
             "",
+            "",
         ),
-        ("c1", "fg", "fg_7", "ws28", "ws28", "", "", "", "", "", "Windows 10", "", "192.168.1.100", ""),
+        ("c1", "fg", "fg_7", "ws28", "ws28", "", "", "", "", "", "Windows 10", "", "", "", "192.168.1.100", "", ""),
         # c2: dc01 — 2 sources (ad, zbx)
         (
             "c2",
@@ -102,12 +110,15 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "",
             "Server 2022",
             "",
+            "",
+            "",
             "10.0.0.1",
             "",
+            "",
         ),
-        ("c2", "zbx", "zbx_3", "dc01", "dc01", "SN002", "", "", "", "", "", "", "10.0.0.1", ""),
+        ("c2", "zbx", "zbx_3", "dc01", "dc01", "SN002", "", "", "", "", "", "", "", "", "10.0.0.1", "", ""),
         # c3: unnamed — 1 source (sp)
-        ("c3", "sp", "sp_99", "", "", "", "", "", "", "", "", "", "", ""),
+        ("c3", "sp", "sp_99", "", "", "", "", "", "", "", "", "", "", "", "", "", ""),
         # c4: phone01 — 1 source (me_mdm)
         (
             "c4",
@@ -121,14 +132,17 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "Apple",
             "iPhone 15",
             "iOS 17",
+            "",
+            "",
             "jsmith",
             "",
             "356789012345678",
+            "",
         ),
     ]
     for row in source_records_data:
         conn.execute(
-            "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             row,
         )
 
@@ -144,6 +158,8 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             manufacturer TEXT DEFAULT '',
             model TEXT DEFAULT '',
             os TEXT DEFAULT '',
+            os_version TEXT DEFAULT '',
+            asset_tag TEXT DEFAULT '',
             assigned_user TEXT DEFAULT '',
             ip_address TEXT DEFAULT '',
             imei TEXT DEFAULT '',
@@ -162,13 +178,15 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "Dell",
             "OptiPlex 7080",
             "Windows 10",
+            "",
+            "",
             "jdoe",
             "192.168.1.100",
             "",
             3,
         ),
-        ("c2", "dc01", 2, ["ad", "zbx"], "SN002", "112233445566", "", "", "Server 2022", "", "10.0.0.1", "", 2),
-        ("c3", "(unnamed)", 1, ["sp"], "", "", "", "", "", "", "", "", 1),
+        ("c2", "dc01", 2, ["ad", "zbx"], "SN002", "112233445566", "", "", "Server 2022", "", "", "", "10.0.0.1", "", 2),
+        ("c3", "(unnamed)", 1, ["sp"], "", "", "", "", "", "", "", "", "", "", 1),
         (
             "c4",
             "phone01",
@@ -179,6 +197,8 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "Apple",
             "iPhone 15",
             "iOS 17",
+            "",
+            "",
             "jsmith",
             "",
             "356789012345678",
@@ -187,7 +207,7 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
     ]
     for row in devices_data:
         conn.execute(
-            "INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             row,
         )
     # ── metrics ────────────────────────────────────────────────────────────

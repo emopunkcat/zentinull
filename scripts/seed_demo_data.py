@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 from datetime import UTC, datetime, timedelta
@@ -259,7 +260,7 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
             source_records.append(tuple(rec.values()))
 
     # Write to DuckDB
-    conn = duckdb.connect(str(MESH_DB))
+    conn = duckdb.connect(str(MESH_DB) + ".tmp")
 
     # ── source_records table ────────────────────────────────────────────
     conn.execute("""
@@ -367,6 +368,7 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
     conn.execute(INDEXES_SQL)
     conn.execute("CHECKPOINT")
     conn.close()
+    os.replace(str(MESH_DB) + ".tmp", str(MESH_DB))
 
     dev_count = len(templates)
     rec_count = len(source_records)

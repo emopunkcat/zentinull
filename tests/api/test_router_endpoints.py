@@ -423,10 +423,13 @@ class TestHealth:
     """GET /health — health check."""
 
     def test_health_returns_ok(self, client: TestClient) -> None:
-        """Returns 200 with status ok, even when DB is unavailable."""
+        """Returns 200 with status and dependency checks, even when DB is unavailable."""
         resp = client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert body["mesh_db"] == "unavailable"
+        assert body["mesh_file"] == "missing"
 
 
 class TestDeviceView:

@@ -7,20 +7,21 @@ Replaces the capture_output=True subprocess model in src/zentinull/pipeline.py.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import sys
-from pathlib import Path
 from typing import Any
 
 import duckdb
 
 from ..api.schema import DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL, SOURCE_RECORDS_SQL
+from ..config import CSV_DIR, DATA_DIR, MESH_DB, ROOT, SPLINK_OUTPUT_DIR
 from ..export_for_splink import export as _run_export_fn
 from ..logging_config import StepTimer, get_logger
+from .render import is_brutalist_enabled, render_banner, render_stage
 from .status import record_done, record_fail, record_start
 from .streaming import run_streaming
 
-ROOT = Path(__file__).resolve().parent.parent.parent.parent
 PYTHON = sys.executable or "python3"
 
 log = get_logger("cli.pipeline")
@@ -95,7 +96,7 @@ def run_export() -> int:
     with StepTimer(log, "export"):
         _run_export_fn()
 
-    csv_path = ROOT / "export" / "csv" / "devices.csv"
+    csv_path = CSV_DIR / "devices.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"Export did not produce {csv_path}")
 
@@ -146,12 +147,12 @@ def run_load() -> int:
     Builds mesh in data/mesh.duckdb.tmp, then atomically renames to mesh.duckdb.
     Returns total device count.
     """
-    csv_path = ROOT / "export" / "splink_output" / "clusters.csv"
+    csv_path = SPLINK_OUTPUT_DIR / "clusters.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"{csv_path} not found — run splink first")
 
-    mesh_path = ROOT / "data" / "mesh.duckdb"
-    tmp_path = ROOT / "data" / "mesh.duckdb.tmp"
+    mesh_path = MESH_DB
+    tmp_path = DATA_DIR / "mesh.duckdb.tmp"
 
     record_start("load")
 
@@ -186,10 +187,8 @@ def run_load() -> int:
             record_count_val: int = int(record_count_row[0])
             conn.close()
 
-            # Swap: remove old mesh, rename temp → mesh
-            if mesh_path.exists():
-                mesh_path.unlink()
-            tmp_path.rename(mesh_path)
+            # Swap: atomically replace old mesh with temp
+            os.replace(tmp_path, mesh_path)
 
             log.info({"event": "mesh_loaded", "devices": device_count, "records": record_count_val})
 
@@ -215,19 +214,60 @@ def run_pipeline(
     """Run the full pipeline: ingest → export → splink → load.
 
     Each stage is streamed and status-tracked independently.
+    Uses a PID-based lock file to prevent concurrent pipeline runs.
     """
-    if not skip_ingest:
-        log.info({"event": "pipeline_stage", "stage": "ingest"})
-        run_ingest(sources=sources, skip_sources=skip_sources)
 
-    log.info({"event": "pipeline_stage", "stage": "export"})
-    total = run_export()
-    log.info({"event": "export_done", "records": total})
+    # ── Concurrency guard ──────────────────────────────────────────────
+    lock_path = DATA_DIR / "pipeline.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = open(lock_path, "w")  # noqa: SIM115
+    have_lock = False
+    try:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            have_lock = True
+            lock_file.write(str(os.getpid()))
+            lock_file.flush()
+        except OSError:
+            try:
+                old_pid = int(lock_path.read_text().strip())
+                msg = f"Pipeline already running (PID {old_pid}). Delete {lock_path} if stale."
+            except Exception:
+                msg = f"Pipeline already running. Delete {lock_path} if stale."
+            raise RuntimeError(msg) from None
 
-    log.info({"event": "pipeline_stage", "stage": "splink"})
-    run_splink()
+        if is_brutalist_enabled():
+            render_banner()
 
-    log.info({"event": "pipeline_stage", "stage": "load"})
-    device_count = run_load()
+        if not skip_ingest:
+            if is_brutalist_enabled():
+                render_stage("INGEST")
+            log.info({"event": "pipeline_stage", "stage": "ingest"})
+            run_ingest(sources=sources, skip_sources=skip_sources)
 
-    log.info({"event": "pipeline_complete", "devices": device_count})
+        if is_brutalist_enabled():
+            render_stage("EXPORT")
+        log.info({"event": "pipeline_stage", "stage": "export"})
+        total = run_export()
+        log.info({"event": "export_done", "records": total})
+
+        if is_brutalist_enabled():
+            render_stage("SPLINK")
+        log.info({"event": "pipeline_stage", "stage": "splink"})
+        run_splink()
+
+        if is_brutalist_enabled():
+            render_stage("LOAD")
+        log.info({"event": "pipeline_stage", "stage": "load"})
+        device_count = run_load()
+
+        log.info({"event": "pipeline_complete", "devices": device_count})
+    finally:
+        if have_lock:
+            lock_file.close()
+            import contextlib
+
+            with contextlib.suppress(OSError):
+                lock_path.unlink()
+        else:
+            lock_file.close()

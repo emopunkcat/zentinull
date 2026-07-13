@@ -10,38 +10,16 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent.parent
-LOG_PATH = ROOT / "data" / "pipeline.log"
+from ..logging_config import get_logger
 
-_pipeline_log: logging.Logger | None = None
-
-
-def _stream_handler() -> RotatingFileHandler:
-    """Return a rotating file handler writing to pipeline.log."""
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
-        str(LOG_PATH),
-        maxBytes=10 * 1024 * 1024,  # 10 MB
-        backupCount=5,
-        encoding="utf-8",
-    )
-    handler.setLevel(logging.DEBUG)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    return handler
+log = get_logger("cli.streaming")
 
 
 def _get_pipeline_log() -> logging.Logger:
-    """Lazily create a dedicated logger for the pipeline log file."""
-    global _pipeline_log
-    if _pipeline_log is None:
-        _pipeline_log = logging.getLogger("zig.cli.streaming")
-        _pipeline_log.setLevel(logging.DEBUG)
-        _pipeline_log.propagate = False
-        _pipeline_log.addHandler(_stream_handler())
-    return _pipeline_log
+    """Return standard logger for streaming commands."""
+    return log
 
 
 def run_streaming(
@@ -107,9 +85,8 @@ def run_streaming(
         assert out is not None
         for raw_line in out:
             line = raw_line.rstrip("\n\r")
-            tagged = f"[{tag}] {line}"
-            print(tagged, file=sys.stderr, flush=True)
-            pipeline_log.info(tagged)
+            pipeline_log.info(f"[{tag}] {line}")
+            _emit_line(line, tag)
             output_lines.append(line)
 
     try:
@@ -123,7 +100,7 @@ def run_streaming(
         process.kill()
         process.wait()
         msg = f"[{tag}] timed out after {timeout}s"
-        print(msg, file=sys.stderr, flush=True)
+        _emit_error(msg)
         pipeline_log.info(msg)
         raise RuntimeError(msg) from None
 
@@ -134,11 +111,31 @@ def run_streaming(
 
     if returncode != 0:
         msg = f"[{tag}] exited with code {returncode}"
-        print(msg, file=sys.stderr, flush=True)
+        _emit_error(msg)
         pipeline_log.info(msg)
         raise RuntimeError(msg)
 
     return returncode, output_lines
+
+
+def _emit_line(line: str, tag: str) -> None:
+    """Print a subprocess output line to stderr, using brutalist rendering if enabled."""
+    from .render import is_brutalist_enabled, render_line
+
+    if is_brutalist_enabled():
+        render_line(f"[{tag}] {line}", with_tag=True)
+    else:
+        print(f"[{tag}] {line}", file=sys.stderr, flush=True)
+
+
+def _emit_error(msg: str) -> None:
+    """Print an error/status message to stderr, using brutalist rendering if enabled."""
+    from .render import is_brutalist_enabled, render_line
+
+    if is_brutalist_enabled():
+        render_line(msg, with_tag=True)
+    else:
+        print(msg, file=sys.stderr, flush=True)
 
 
 def stream_command(

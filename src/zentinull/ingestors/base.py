@@ -7,10 +7,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from ..config import DATA_DIR
 
 
 def db(source_name: str) -> sqlite3.Connection:
@@ -18,7 +17,7 @@ def db(source_name: str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -35,7 +34,8 @@ def create_table(conn: sqlite3.Connection, name: str, columns: list[str], raw: b
     """
     conn.execute(f"DROP TABLE IF EXISTS {name}")
     conn.execute(sql)
-    conn.commit()
+    if not conn.in_transaction:
+        conn.commit()
 
 
 def insert(conn: sqlite3.Connection, table: str, records: list[dict[str, Any]]) -> int:
@@ -50,7 +50,8 @@ def insert(conn: sqlite3.Connection, table: str, records: list[dict[str, Any]]) 
         row = tuple(json.dumps(v, default=str) if isinstance(v, dict | list) else v for v in r.values())
         rows.append(row)
     conn.executemany(sql, rows)
-    conn.commit()
+    if not conn.in_transaction:
+        conn.commit()
     return len(rows)
 
 
@@ -75,5 +76,6 @@ def insert_raw(
         )
         rows.append(row)
     conn.executemany(sql, rows)
-    conn.commit()
+    if not conn.in_transaction:
+        conn.commit()
     return len(rows)

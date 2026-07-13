@@ -1,6 +1,19 @@
 """
 Splink v4 — properly trained from raw data.
-No manual λ. Deterministic rules → λ estimation → u → EM round-robin → supervised labels.
+No manual lambda. Deterministic rules -> lambda estimation -> u -> EM round-robin -> supervised labels.
+
+DATA LINEAGE NOTICE:
+The `additional_columns_to_retain` list below defines which CSV columns survive
+Splink's clustering and appear in the output `clusters.csv`. Any field omitted
+from this list is SILENTLY DROPPED — no warning, no log.
+
+If you add a new field to `SPLINK_FIELDS` in `export_for_splink.py`, you MUST
+also add it to `additional_columns_to_retain` here, or it will never reach the
+DuckDB mesh database or the API layer.
+
+Current retained fields: source, source_id, name, name_clean, serial_number,
+mac_address, mac_clean, asset_tag, manufacturer, model, os, os_version,
+assigned_user, ip_address, imei.
 """
 
 from collections import defaultdict
@@ -24,7 +37,7 @@ db_api = DuckDBAPI()
 # ── Load ───────────────────────────────────────────────────────────────────
 df = pd.read_csv(CSV)
 df.columns = [c.strip() for c in df.columns]
-df["unique_id"] = df["source"] + "::" + df["source_id"]
+df["unique_id"] = df["source"] + "::" + df["source_id"].astype(str)
 log.info({"event": "load", "records": len(df), "sources": len(df["source"].unique())})
 
 # ── Settings — all normalized fields ───────────────────────────────────────
@@ -33,16 +46,21 @@ settings = SettingsCreator(
     unique_id_column_name="unique_id",
     additional_columns_to_retain=[
         "source",
+        "source_id",
         "name",
         "name_clean",
         "serial_number",
         "mac_address",
         "mac_clean",
+        "asset_tag",
         "manufacturer",
         "model",
-        "assigned_user",
         "os",
+        "os_version",
+        "assigned_user",
         "ip_address",
+        "imei",
+        "extra_attributes",
     ],
     blocking_rules_to_generate_predictions=[
         block_on("serial_number"),
@@ -167,6 +185,7 @@ for mw in [10, 5, 0, -2, -5, -10]:
     )
 
 # Best threshold: where 3+ source clusters first appear
+BEST = -5
 for mw in [10, 5, 0, -2, -5, -10]:
     clu = linker.clustering.cluster_pairwise_predictions_at_threshold(pairwise, threshold_match_weight=mw)
     cd = clu.as_record_dict()

@@ -6,19 +6,15 @@ Uses LDAPBindAuth from auth.py.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
+from ..config import AD_PASSWORD, AD_SEARCH_BASE, AD_SERVER, AD_USER
 from ..logging_config import get_logger
 from .auth import LDAPBindAuth
 from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.ad")
 
-AD_SERVER = os.environ.get("AD_SERVER", "ldap://192.168.20.11:389")
-AD_USER = os.environ.get("AD_USER", "MOONLITE\\jejo")
-AD_PASSWORD = os.environ.get("AD_PASSWORD", "")
-SEARCH_BASE = os.environ.get("AD_SEARCH_BASE", "DC=moonlite,DC=local")
 COMPUTER_ATTRS = [
     "sAMAccountName",
     "dNSHostName",
@@ -95,7 +91,7 @@ def ingest() -> int:
 
     try:
         ldap_conn.search(
-            search_base=SEARCH_BASE,
+            search_base=AD_SEARCH_BASE,
             search_filter="(objectClass=computer)",
             attributes=COMPUTER_ATTRS,
             size_limit=5000,
@@ -105,8 +101,9 @@ def ingest() -> int:
         dns = [str(entry.entry_dn) for entry in ldap_conn.entries]
         if attrs_list:
             records, columns = _transform_ad(attrs_list, dns)
-            create_table(conn, "computers", columns)
-            n = insert_raw(conn, "computers", records)
+            with conn:
+                create_table(conn, "computers", columns)
+                n = insert_raw(conn, "computers", records)
             log.info({"event": "inserted", "source": "ad", "table": "computers", "rows": n})
             total += n
     finally:

@@ -335,7 +335,7 @@ def test_export_main_block(tmp_path, monkeypatch):
     monkeypatch.setattr(
         export_mod,
         "DEVICE_TABLES",
-        {"me_ec": ("computers", ["id", "name", "serial_number"])},
+        {"me_ec": "computers"},
     )
 
     # __main__ just calls export(), so call it directly

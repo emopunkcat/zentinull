@@ -243,6 +243,7 @@ SPLINK_HEADERS = [
     "assigned_user",
     "ip_address",
     "imei",
+    "extra_attributes",
 ]
 
 
@@ -279,6 +280,7 @@ def _write_sample_csv(tmp_path: Path) -> Path:
                 "",
                 "10.0.0.1",
                 "",
+                "",
             ],
             # c1 — server-01 from zbx (row 2) — same cluster, different source
             [
@@ -298,6 +300,7 @@ def _write_sample_csv(tmp_path: Path) -> Path:
                 "",
                 "10.0.0.1",
                 "",
+                "",
             ],
             # c2 — laptop-01 from me (row 3)
             [
@@ -316,6 +319,7 @@ def _write_sample_csv(tmp_path: Path) -> Path:
                 "24H2",
                 "jdoe",
                 "10.0.0.2",
+                "",
                 "",
             ],
         ],

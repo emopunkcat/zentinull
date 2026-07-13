@@ -69,7 +69,7 @@ docstring-code-format = true
 [tool.mypy]
 python_version = "3.12"
 strict = true
-explicit_package_bases = true
+
 
 [[tool.mypy.overrides]]
 module = [

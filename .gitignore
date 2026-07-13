@@ -40,3 +40,5 @@ data/status.json
 # OS
 .DS_Store
 Thumbs.db
+.coverage
+data/*-oauth.json

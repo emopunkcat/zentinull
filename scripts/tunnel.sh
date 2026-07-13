@@ -31,6 +31,27 @@
 
 set -euo pipefail
 
+# ── Load SSH password from .env if present ────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+if [ -f "$ROOT_DIR/.env" ] && [ -z "${SSH_PASS:-}" ]; then
+    SSH_PASS="$(python3 -c "
+import os
+env_file = '$ROOT_DIR/.env'
+if os.path.exists(env_file):
+    with open(env_file) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('SSH_PASS=') or line.startswith('SSH_PASS '):
+                val = line.split('=', 1)[1].strip()
+                # Strip surrounding quotes
+                if (val.startswith(\"'\") and val.endswith(\"'\")) or \
+                   (val.startswith('\"') and val.endswith('\"')):
+                    val = val[1:-1]
+                print(val)
+                break
+" 2>/dev/null || true)"
+fi
 # ── Default port mappings ─────────────────────────────────────────────────────
 # Each LOCAL_PORT:REMOTE_HOST:REMOTE_PORT
 # Override any via env vars, e.g. SHAREPOINT_LOCAL=9999
@@ -61,10 +82,12 @@ fi
 SSH_HOST="$1"
 shift
 
-# Remaining args = command to run (default: serve.py pipeline)
+# Remaining args = command to run (default: python3 serve.py pipeline)
 CMD=("$@")
 if [ ${#CMD[@]} -eq 0 ]; then
     CMD=("python3" "serve.py" "pipeline")
+elif [ "${CMD[0]}" = "serve.py" ]; then
+    CMD=("python3" "${CMD[@]}")
 fi
 
 # ── Build SSH -L flags ────────────────────────────────────────────────────────
@@ -103,15 +126,30 @@ export ZBX_URL="https://localhost:$(echo "$ZBX_FWD" | cut -d: -f1)/api_jsonrpc.p
 
 # ── Start SSH tunnel in background ────────────────────────────────────────────
 echo "Starting SSH tunnel (background)..."
-ssh -f -N "${L_FLAGS[@]}" $SSH_OPTS "$SSH_HOST"
+SSH_CMD=(ssh)
+if [ -n "${SSH_PASS:-}" ]; then
+    export SSHPASS="$SSH_PASS"
+    SSH_CMD=(sshpass -e ssh)
+fi
+# Accept new host keys silently (needed for first connection to jump box)
+SSH_EXTRA=(-o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes)
+"${SSH_CMD[@]}" -N "${L_FLAGS[@]}" "${SSH_EXTRA[@]}" $SSH_OPTS "$SSH_HOST" &
 SSH_PID=$!
+# Give the tunnel a moment to establish
+sleep 1
+if ! kill -0 "$SSH_PID" 2>/dev/null; then
+    echo "ERROR: SSH tunnel failed to start. Is the jump box reachable?"
+    exit 1
+fi
 
-# Cleanup on exit
+# ── Cleanup on exit ───────────────────────────────────────────────────────────
 cleanup() {
     echo
-    echo "Closing SSH tunnel..."
-    kill "$SSH_PID" 2>/dev/null || true
-    wait "$SSH_PID" 2>/dev/null || true
+    if [ -n "$SSH_PID" ]; then
+        echo "Closing SSH tunnel..."
+        kill -- -"$SSH_PID" 2>/dev/null || true
+        wait "$SSH_PID" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT INT TERM
 

@@ -640,7 +640,10 @@ class TestBenchAPIRunBenchmarksIntegration:
         # Health endpoint — fastest, simplest verification
         resp = client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["mesh_db"] == "connected"
+        assert body["mesh_file"] == "present"
 
         # Dashboard — real KPIs
         resp = client.get("/dashboard")

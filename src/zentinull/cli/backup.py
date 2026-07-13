@@ -8,15 +8,12 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..config import DATA_DIR, EXPORT_DIR, MESH_DB
 from ..logging_config import get_logger
 
 log = get_logger("cli.backup")
 
-ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SQLITE_GLOB = "*.sqlite"
-MESH_DB = "mesh.duckdb"
-EXPORT_DIR = "export"
-DATA_DIR = "data"
 BACKUPS_DIR = "backups"
 
 
@@ -49,7 +46,7 @@ def create_backup(output_dir: Path | None = None) -> Path:
     ts_dir = now.strftime("%Y-%m-%dT%H%M%S")
     ts_iso = now.isoformat().replace("+00:00", "Z")
     if output_dir is None:
-        output_dir = ROOT / DATA_DIR / BACKUPS_DIR / ts_dir
+        output_dir = DATA_DIR / BACKUPS_DIR / ts_dir
 
     output_dir.mkdir(parents=True, exist_ok=True)
     log.info({"event": "backup_started", "output_dir": str(output_dir)})
@@ -57,7 +54,7 @@ def create_backup(output_dir: Path | None = None) -> Path:
     manifest_files: dict[str, dict[str, object]] = {}
 
     # ── Phase 1: WAL checkpoint ──────────────────────────────────────────
-    data_path = ROOT / DATA_DIR
+    data_path = DATA_DIR
     sqlite_files = sorted(data_path.glob(SQLITE_GLOB))
     for db_path in sqlite_files:
         try:
@@ -81,24 +78,24 @@ def create_backup(output_dir: Path | None = None) -> Path:
             manifest_files[db_path.name] = {"size_bytes": size_bytes, "copied": False}
 
     # ── Phase 3: Copy DuckDB mesh ────────────────────────────────────────
-    mesh_path = data_path / MESH_DB
-    if mesh_path.exists():
-        size_bytes = mesh_path.stat().st_size
-        print(f"Backing up {MESH_DB} ({_fmt_bytes(size_bytes)})...")
+    mesh_name = MESH_DB.name
+    if MESH_DB.exists():
+        size_bytes = MESH_DB.stat().st_size
+        print(f"Backing up {mesh_name} ({_fmt_bytes(size_bytes)})...")
         try:
-            shutil.copy2(mesh_path, output_dir / MESH_DB)
-            manifest_files[MESH_DB] = {"size_bytes": size_bytes, "copied": True}
-            log.info({"event": "copied", "file": MESH_DB, "size_bytes": size_bytes})
+            shutil.copy2(MESH_DB, output_dir / mesh_name)
+            manifest_files[mesh_name] = {"size_bytes": size_bytes, "copied": True}
+            log.info({"event": "copied", "file": mesh_name, "size_bytes": size_bytes})
         except Exception as exc:
-            log.error({"event": "copy_failed", "file": MESH_DB, "error": str(exc)})
-            manifest_files[MESH_DB] = {"size_bytes": size_bytes, "copied": False}
+            log.error({"event": "copy_failed", "file": mesh_name, "error": str(exc)})
+            manifest_files[mesh_name] = {"size_bytes": size_bytes, "copied": False}
     else:
-        log.info({"event": "skipped", "file": MESH_DB, "reason": "not_found"})
+        log.info({"event": "skipped", "file": mesh_name, "reason": "not_found"})
 
     # ── Phase 4: Copy export directory ───────────────────────────────────
-    export_path = ROOT / EXPORT_DIR
+    export_path = EXPORT_DIR
     if export_path.is_dir():
-        dest_export = output_dir / EXPORT_DIR
+        dest_export = output_dir / EXPORT_DIR.name
         dest_export.mkdir(parents=True, exist_ok=True)
         for src_file in export_path.rglob("*"):
             if src_file.is_file():
@@ -106,7 +103,7 @@ def create_backup(output_dir: Path | None = None) -> Path:
                 dest_file = dest_export / rel
                 dest_file.parent.mkdir(parents=True, exist_ok=True)
                 size_bytes = src_file.stat().st_size
-                key = f"{EXPORT_DIR}/{rel.as_posix()}"
+                key = f"{EXPORT_DIR.name}/{rel.as_posix()}"
                 print(f"Backing up {key} ({_fmt_bytes(size_bytes)})...")
                 try:
                     shutil.copy2(src_file, dest_file)
@@ -116,7 +113,7 @@ def create_backup(output_dir: Path | None = None) -> Path:
                     log.error({"event": "copy_failed", "file": key, "error": str(exc)})
                     manifest_files[key] = {"size_bytes": size_bytes, "copied": False}
     else:
-        log.info({"event": "skipped", "file": EXPORT_DIR, "reason": "not_found"})
+        log.info({"event": "skipped", "file": EXPORT_DIR.name, "reason": "not_found"})
 
     # ── Phase 5: Write manifest ──────────────────────────────────────────
     manifest = {

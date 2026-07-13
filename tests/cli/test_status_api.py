@@ -11,7 +11,6 @@ def test_record_start_writes_running(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status, record_start
@@ -25,7 +24,6 @@ def test_record_done_writes_ok(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status, record_done, record_start
@@ -39,9 +37,7 @@ def test_record_done_writes_ok(monkeypatch, tmp_path: Path) -> None:
 
 def test_record_done_with_stats(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status, record_done, record_start
@@ -55,9 +51,7 @@ def test_record_done_with_stats(monkeypatch, tmp_path: Path) -> None:
 
 def test_record_done_load_sets_pipeline_time(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status, record_done, record_start
@@ -72,7 +66,6 @@ def test_record_fail_writes_error(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status, record_fail, record_start
@@ -88,7 +81,6 @@ def test_record_freshness_writes(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status, record_freshness
@@ -103,7 +95,6 @@ def test_get_status_returns_default_when_empty(monkeypatch, tmp_path: Path) -> N
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status
@@ -116,7 +107,6 @@ def test_get_status_returns_data(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import get_status, record_done, record_start
@@ -132,7 +122,6 @@ def test_print_status_with_stages(monkeypatch, tmp_path: Path, capsys) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import print_status, record_done, record_start
@@ -151,7 +140,6 @@ def test_print_status_empty(monkeypatch, tmp_path: Path, capsys) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     status_file = data_dir / "status.json"
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
     monkeypatch.setattr(status_mod, "STATUS_FILE", status_file)
 
     from zentinull.cli.status import print_status

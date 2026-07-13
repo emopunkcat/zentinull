@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -13,8 +15,11 @@ class SourceRecord(BaseModel):
     source: str
     source_id: str = ""
     name: str = ""
+    name_clean: str = ""
     serial_number: str = ""
     mac_address: str = ""
+    os_version: str = ""
+    asset_tag: str = ""
     mac_clean: str = ""
     manufacturer: str = ""
     model: str = ""
@@ -22,12 +27,7 @@ class SourceRecord(BaseModel):
     assigned_user: str = ""
     ip_address: str = ""
     imei: str = ""
-
-
-class SourceRecordWithRaw(SourceRecord):
-    """SourceRecord with raw_json attached from source DB."""
-
-    raw_json: dict | None = None  # type: ignore[type-arg]
+    extra_attributes: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClusterInfo(BaseModel):
@@ -40,10 +40,13 @@ class ClusterInfo(BaseModel):
     serial_number: str = ""
     mac_address: str = ""
     manufacturer: str = ""
+    os_version: str = ""
+    asset_tag: str = ""
     model: str = ""
     os: str = ""
     assigned_user: str = ""
     ip_address: str = ""
+    imei: str = ""
     record_count: int = 0
 
 
@@ -57,7 +60,7 @@ class DeviceStory(BaseModel):
     sources: list[str] = Field(default_factory=list)
     record_count: int = 0
     consolidated: dict[str, list[str]] = Field(default_factory=dict)
-    records: list[SourceRecord | SourceRecordWithRaw] = Field(default_factory=list)
+    records: list[SourceRecord] = Field(default_factory=list)
 
 
 class MeshStats(BaseModel):
@@ -93,3 +96,32 @@ class AnomaliesReport(BaseModel):
     no_name_list: list[ClusterInfo] = Field(default_factory=list)
     no_serial: int = 0
     no_serial_list: list[ClusterInfo] = Field(default_factory=list)
+
+
+class MetricRecord(BaseModel):
+    """A single metrics data point from a source system."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cluster_id: str = ""
+    source: str = ""
+    metric_name: str = ""
+    value: float | None = None
+    text_value: str = ""
+    tags: list[str] = Field(default_factory=list)
+    recorded_at: str = ""
+    ingested_at: str = ""
+
+
+class EventRecord(BaseModel):
+    """A single event from a source system."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cluster_id: str = ""
+    source: str = ""
+    event_type: str = ""
+    detail: str = ""
+    severity: str = "info"
+    recorded_at: str = ""
+    ingested_at: str = ""

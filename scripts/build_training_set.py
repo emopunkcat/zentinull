@@ -18,7 +18,7 @@ OUT = str(ROOT / "export" / "splink_output" / "training_labels.csv")
 
 df = pd.read_csv(CSV)
 df.columns = [c.strip() for c in df.columns]
-df["unique_id"] = df["source"] + "::" + df["source_id"]
+df["unique_id"] = df["source"] + "::" + df["source_id"].astype(str)
 
 # Pre-index everything into dicts
 uid2row = {}

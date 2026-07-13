@@ -48,7 +48,7 @@ check-all: lint typecheck test check-format bench-api  ## Full quality gate (lin
 ci: check-all  ## Match CI pipeline (same as check-all)
 
 typecheck:  ## Run mypy type checking
-	mypy src/zentinull/
+	MYPYPATH=src mypy src/zentinull/
 
 pre-commit:  ## Run all pre-commit hooks on all files
 	pre-commit run --all-files

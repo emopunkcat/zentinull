@@ -5,20 +5,17 @@ FortiGate ingest: all 8 endpoints.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import requests
 
+from ..config import FG_API_KEY, FG_HOST, FG_PORT
 from ..logging_config import get_logger
 from .auth import APIKeyAuth
 from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.fg")
 
-FG_HOST = os.environ.get("FG_HOST", "192.168.20.1")
-FG_PORT = int(os.environ.get("FG_PORT", "8443"))
-FG_API_KEY = os.environ.get("FG_API_KEY", "")
 FG_BASE = f"https://{FG_HOST}:{FG_PORT}/api/v2"
 
 ENDPOINTS = {
@@ -144,7 +141,7 @@ def _fg_get(path: str, auth: APIKeyAuth) -> list:  # type: ignore[type-arg]
     url = f"{FG_BASE}{path}"
     headers = auth.get_headers()
     try:
-        r = requests.get(url, headers=headers, verify=False, timeout=30)
+        r = requests.get(url, headers=headers, verify=False, timeout=(10, 30))
         r.raise_for_status()
         data = r.json()
         results = data.get("results", [])
@@ -185,9 +182,10 @@ def ingest() -> int:
             log.info({"event": "empty", "source": "fg", "table": tname})
             continue
         records = _transform_fg(items, tdef["cols"], FG_HOST)  # type: ignore[arg-type]
-        conn.execute(f"DROP TABLE IF EXISTS {tname}")
-        create_table(conn, tname, tdef["cols"])  # type: ignore[arg-type]
-        n = insert_raw(conn, tname, records)
+        with conn:
+            conn.execute(f"DROP TABLE IF EXISTS {tname}")
+            create_table(conn, tname, tdef["cols"])  # type: ignore[arg-type]
+            n = insert_raw(conn, tname, records)
         total += n
 
     conn.close()

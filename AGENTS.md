@@ -61,9 +61,9 @@ Core design rule: **ingest and entity resolution are cleanly separated**. Ingest
 |**Export**|Python + CSV|Unify schemas, normalize fields for Splink|
 |**Entity Resolution**|Splink (Python)|ML matching — 4-stage training (λ, u, EM, supervised), predict, cluster|
 |**Mesh DB**|DuckDB|Consolidated device + metrics tables, indexed|
-|**API**|FastAPI|REST query layer, read-only, HTML device view|
-|**Dashboard**|Streamlit|Pipeline monitoring, device search, cluster explorer|
-
+|**Config**|`src/zentinull/config.py`|Centralized env-var-backed settings and path constants — single source of truth for runtime config|
+|**API**|FastAPI|REST query layer, read-only, HTML device view, Prometheus `/metrics`, enhanced `/health` with dependency probes|
+|**Dashboard**|Streamlit|Pipeline monitoring, device search, cluster explorer — fetches all data via httpx calls to API (port 8001), no direct DuckDB access|
 **Three invocation surfaces:**
 
 - `serve.py` — unified argparse CLI with 13 subcommands (`start`, `pipeline`, `ingest`, `splink`, `export`, `load`, `seed`, `bench`, `bench-api`, `status`, `backup`, `logs`, `db`); uses lazy imports inside each `cmd_*` function
@@ -74,7 +74,7 @@ Core design rule: **ingest and entity resolution are cleanly separated**. Ingest
 1. `src/zentinull/pipeline.py` (original) — subprocess-based, shells out to scripts
 2. `src/zentinull/cli/pipeline.py` (modern) — in-process ingest/export, streaming subprocess for Splink, temp-and-swap atomic DuckDB load
 
-Benchmarking: `scripts/bench.py` (pytest timing + coverage, historical trend) and `scripts/bench_api.py` (per-endpoint timing of 13 endpoints against seeded TestClient, regression gate) — both persist to `.benchmarks/`.
+Benchmarking: `scripts/bench.py` (pytest timing + coverage, historical trend) and `scripts/bench_api.py` (per-endpoint timing of 14 endpoints against seeded TestClient, regression gate) — both persist to `.benchmarks/`.
 
 ---
 
@@ -83,13 +83,14 @@ Benchmarking: `scripts/bench.py` (pytest timing + coverage, historical trend) an
 |Path|Purpose|
 |---|---|
 |`src/zentinull/`|Installed package (`zentinull`, via `pip install -e .`)|
-|`src/zentinull/ingestors/`|6 source-specific ingestors + `base.py` (SQLite helpers) + `auth.py` (auth classes)|
-|`src/zentinull/api/`|FastAPI server + router (14 endpoints) + DuckDB query layer (`MeshDB`, 653 lines) + Pydantic models + schema DDL|
-|`src/zentinull/cli/`|In-process pipeline runner, streaming subprocess, status tracking, backup, DB management|
-|`src/zentinull/export_for_splink.py`|SQLite-to-CSV export with 15-field unified schema|
-|`src/zentinull/logging_config.py`|Structured logging framework (two formatters, `StepTimer`)|
-|`scripts/`|Runnable entry points — `run_ingest.py`, `run_splink.py`, `build_training_set.py`, `seed_demo_data.py`, `bench.py`, `bench_api.py`|
-|`tests/`|pytest suite — mirrors source layout under `tests/api/`, `tests/cli/`, `tests/ingestors/`, `tests/logging/`, `tests/scripts/` + 4 root-level test files|
+|`src/zentinull/config.py`|Centralized configuration — all env-var-backed settings and path constants|
+|`src/zentinull/contracts.py`|Shared data contract constants — `SPLINK_FIELDS` list (16 unified columns)|
+|`src/zentinull/api/`|FastAPI server + router (14 endpoints) + DuckDB query layer (`MeshDB`, 690 lines) + Pydantic models + schema DDL + Prometheus `/metrics`|
+|`src/zentinull/api/metrics.py`|Lightweight Prometheus-format metrics collector (request count, latency, DB errors, pipeline runs)|
+|`src/zentinull/cli/`|In-process pipeline runner, streaming subprocess, status tracking, backup, DB management, brutalist log renderer|
+|`src/zentinull/export_for_splink.py`|SQLite-to-CSV export with 16-field unified schema|
+|`src/zentinull/logging_config.py`|Structured logging framework (six formatters, `StepTimer`, `RequestIDFilter` for correlation IDs)|
+|`tests/`|pytest suite — mirrors source layout under `tests/api/`, `tests/cli/`, `tests/ingestors/`, `tests/logging/` + 4 root-level test files|
 |`data/`|Runtime database files (sqlite + duckdb + status.json + pipeline.log, gitignored)|
 |`export/`|CSV files for Splink pipeline (gitignored)|
 |`.benchmarks/`|Historical benchmark results (gitignored)|
@@ -100,7 +101,7 @@ Benchmarking: `scripts/bench.py` (pytest timing + coverage, historical trend) an
 |---|---|
 |`serve.py`|Unified CLI — 13 subcommands for all pipeline operations|
 |`dashboard.py`|Streamlit app — pipeline KPIs, device search, cluster explorer|
-|`Makefile`|35+ targets across setup, quality, test, pipeline, API, Docker|
+|`Makefile`|37 targets across setup, quality, test, pipeline, API, Docker|
 |`pyproject.toml`|Package metadata, all tool config (Ruff, mypy, pytest, coverage)|
 
 ---
@@ -181,7 +182,6 @@ streamlit run dashboard.py         # Opens on port 8501
 - **Double quotes** for strings (`"` not `'`).
 - Ruff enforced: `E, F, I, N, W, UP, B, SIM, ARG, RUF100`. Ignores `E501` (handled by line-length), `B028` (intentional in hot-path logs).
 - Mypy **strict mode** on `src/zentinull/`, with `ignore_missing_imports` for `ldap3`, `splink`, `duckdb`.
-- Two files skip mypy entirely: `router.py` and `db.py` (`# mypy: ignore-errors`).
 - Tests skip `ARG` rule via per-file ignore.
 - Pre-commit hooks enforce Ruff lint+format, trailing-whitespace, EOF newline, YAML validity, and no large files.
 - `from __future__ import annotations` used throughout source.
@@ -222,6 +222,10 @@ def ingest() -> int:
 
 Key rules: one table per source, raw JSON stored in `raw_json` column, no dedup, no ALTER TABLE at runtime. Malformed records are skipped (logged); missing fields are `""`/`NULL`.
 
+### Shared Data Contracts
+
+`src/zentinull/contracts.py` defines `SPLINK_FIELDS` — the single source of truth for the 16 unified column names used across export, Splink, DuckDB schema, and API. Every layer imports from here. The `scripts/run_splink.py` file has its own `additional_columns_to_retain` list that MUST be kept in sync with `SPLINK_FIELDS` — columns not in that list are silently dropped by Splink during clustering.
+
 ### Error Handling
 
 - **Ingestors**: per-endpoint `try/except`, log error as structured event, continue to next endpoint.
@@ -242,7 +246,7 @@ log = get_logger("ingest.fg")  # hierarchy: zig.<component>
 log.info({"event": "inserted", "source": "fg", "rows": n})
 ```
 
-Two formatters: `key=value` (human, default) and JSON (`LOG_JSON=true`). `StepTimer` context manager wraps timing blocks. Logger hierarchy is `zig.*` throughout. CLI modules (`cli/*`) use `get_logger("cli.<module>")`.
+Six formatters: `StructuredFormatter` (key=value), `JsonFormatter` (JSON lines), `PrettyFormatter` (colored terminal), `BrutalistFormatter` (block-char badges), `RegexBrutalistFormatter` (regex highlighting + format templates), `ColumnarFormatter` (compact 48-char headlines). `StepTimer` context manager wraps timing blocks. Logger hierarchy is `zig.*` throughout. CLI modules (`cli/*`) use `get_logger("cli.<module>")`.
 
 ### SQLite3 Row Caveat
 
@@ -326,7 +330,7 @@ Pure functions returning `(records, columns)` tuples. No I/O in transforms. Used
 |File|Role|
 |---|---|
 |`pyproject.toml`|Package metadata, dependencies (10 runtime + 5 dev), all tool config|
-|`Makefile`|All dev commands (35+ targets)|
+|`Makefile`|All dev commands (37 targets)|
 |`.env.example`|Required env vars — 5 source auth blocks + server config|
 |`serve.py`|Unified CLI — 13 subcommands, lazy imports inside `cmd_*` functions|
 |`dashboard.py`|Streamlit app — pipeline KPIs, device search, cluster explorer|
@@ -336,14 +340,18 @@ Pure functions returning `(records, columns)` tuples. No I/O in transforms. Used
 |`src/zentinull/cli/status.py`|`record_start/done/fail/freshness()`, `get_status()`, `print_status()`|
 |`src/zentinull/cli/backup.py`|`create_backup()` — WAL checkpoint + copy DBs + manifest|
 |`src/zentinull/cli/db_mgmt.py`|`list_dbs()`, `vacuum_dbs()`, `check_dbs()`|
-|`src/zentinull/logging_config.py`|`StructuredFormatter`, `JsonFormatter`, `StepTimer`, `get_logger()`|
+|`src/zentinull/cli/render.py`|Brutalist log renderer — `rich`-powered terminal output for pipeline streams, gated behind `ZENTINULL_LOG_STYLE=brutalist`|
+|`src/zentinull/logging_config.py`|`StructuredFormatter`, `JsonFormatter`, `PrettyFormatter`, `BrutalistFormatter`, `RegexBrutalistFormatter`, `ColumnarFormatter`, `StepTimer`, `RequestIDFilter`, `get_logger()`|
+|`src/zentinull/config.py`|Centralized configuration — env vars, path constants, ingestor auth settings|
+|`src/zentinull/contracts.py`|`SPLINK_FIELDS` — shared data contract (16 unified column names)|
 |`src/zentinull/ingestors/base.py`|`db()`, `create_table()`, `insert()`, `insert_raw()` — SQLite helpers|
 |`src/zentinull/ingestors/auth.py`|`APIKeyAuth`, `OAuth2RefreshAuth`, `LDAPBindAuth`|
 |`src/zentinull/export_for_splink.py`|Unified CSV export with `SPLINK_FIELDS` and `FIELD_MAP`|
-|`src/zentinull/api/server.py`|FastAPI app, CORS, lifespan, uvicorn entry point on port 8001|
-|`src/zentinull/api/router.py`|14 REST endpoints, inline HTML template for device viewer|
-|`src/zentinull/api/db.py`|`MeshDB` — DuckDB query layer (653 lines), 7-step cluster resolution cascade|
-|`src/zentinull/api/models.py`|7 frozen Pydantic models (`SourceRecord`, `ClusterInfo`, `DeviceStory`, `MeshStats`, `DashboardStats`, `AnomaliesReport`, `SourceRecordWithRaw`)|
+|`src/zentinull/api/server.py`|FastAPI app, CORS, lifespan, request ID middleware, dotenv loading, uvicorn on port 8001|
+|`src/zentinull/api/router.py`|14 REST endpoints (incl. /metrics, /health enhanced), inline HTML device viewer|
+|`src/zentinull/api/db.py`|`MeshDB` — DuckDB query layer (690 lines), 7-step cluster resolution cascade|
+|`src/zentinull/api/models.py`|8 frozen Pydantic models (`SourceRecord`, `ClusterInfo`, `DeviceStory`, `MetricRecord`, `EventRecord`, `MeshStats`, `DashboardStats`, `AnomaliesReport`)|
+|`src/zentinull/api/metrics.py`|Lightweight Prometheus-format metrics — request count, latency histogram, DB errors, pipeline runs|
 |`src/zentinull/api/schema.py`|DuckDB DDL constants (`SOURCE_RECORDS_SQL`, `DEVICES_SQL`, `METRICS_SQL`, `EVENTS_SQL`, `INDEXES_SQL`) + `create_mesh_tables()`|
 |`scripts/run_ingest.py`|Sequential ingestor runner (all 6 sources, continues on error)|
 |`scripts/run_splink.py`|Full Splink pipeline — load, 4-stage training, predict, threshold sweep, export|
@@ -362,7 +370,7 @@ Pure functions returning `(records, columns)` tuples. No I/O in transforms. Used
 |**Package manager**|pip + setuptools (src layout, editable install required: `pip install -e .`)|
 |**Formatter**|Ruff (`ruff format`, line-length 120, double quotes)|
 |**Linter**|Ruff (`ruff check`, select `E,F,I,N,W,UP,B,SIM,ARG,RUF100`)|
-|**Type checker**|Mypy strict mode (ignores `ldap3`, `splink`, `duckdb`; skips `router.py` and `db.py`)|
+|**Type checker**|Mypy strict mode (ignores `ldap3`, `splink`, `duckdb`)|
 |**Test runner**|pytest with `asyncio_mode = "auto"` (though all tests are synchronous)|
 |**Pre-commit**|Ruff lint+format, trailing-whitespace, EOF fixer, YAML check, large-file guard, mypy|
 |**CI**|4 jobs: lint → typecheck → test+cov → benchmark regression gate|
@@ -388,9 +396,9 @@ Pure functions returning `(records, columns)` tuples. No I/O in transforms. Used
 
 ### Framework
 
-- **pytest 9.x** with `pytest-asyncio` (`asyncio_mode = "auto"`, configured in `pyproject.toml`).
-- **~480+ tests** across 21 files in 5 subpackages plus 4 root-level files.
-- **92%+ coverage** (measured by CI).
+- **pytest 8.x** with `pytest-asyncio` (`asyncio_mode = "auto"`, configured in `pyproject.toml`).
+- **456 tests** across 28 files in 5 subpackages plus 4 root-level files.
+- **92% coverage** (measured by CI).
 
 ### Conftest Fixtures
 
@@ -424,15 +432,15 @@ When patching ingestor `ingest()` functions that import `db` locally (e.g. `from
 
 |Area|Tests|Coverage|
 |---|---|---|
-|**API — MeshDB**|`test_db_mesh.py` (594 lines)|All 15 query methods, 7-dimension search, dashboard, anomalies|
-|**API — Router endpoints**|`test_router_endpoints.py` (446 lines)|All 14 endpoints with 200/404/422/503 paths|
+|**API — MeshDB**|`test_db_mesh.py` (595 lines)|All 15 query methods, 7-dimension search, dashboard, anomalies|
+|**API — Router endpoints**|`test_router_endpoints.py` (449 lines)|All 14 endpoints with 200/404/422/503 paths|
 |**API — Schema**|`test_schema.py`|DDL verification, CSV→mesh loading|
 |**API — Models**|`test_models.py` + `test_models_edge.py`|Round-trip serialization, edge cases, defaults|
 |**API — Server**|`test_server.py`|Lifespan, CORS, port parsing|
 |**API — Pure functions**|`test_db_pure.py`|`_safe()`, `_norm_mac()` edge-to-edge|
-|**CLI — Pipeline**|`test_pipeline.py` (547 lines)|run_ingest, run_export, run_splink, run_load|
-|**CLI — Backup**|`test_backup.py` (311 lines)|create_backup, manifest, WAL checkpoint|
-|**CLI — Streaming**|`test_streaming.py` (142 lines)|run_streaming scenarios|
+|**CLI — Pipeline**|`test_pipeline.py` (557 lines)|run_ingest, run_export, run_splink, run_load|
+|**CLI — Backup**|`test_backup.py` (334 lines)|create_backup, manifest, WAL checkpoint|
+|**CLI — Streaming**|`test_streaming.py` (141 lines)|run_streaming scenarios|
 |**CLI — DB Mgmt**|`test_db_mgmt.py`|list/vacuum/check with capsys|
 |**CLI — Status**|`test_status_api.py` + `test_status_format.py`|Lifecycle, formatting|
 |**Ingestors — Base**|`test_base.py` + `test_base_extended.py`|SQLite helpers, WAL mode, JSON|
@@ -443,7 +451,7 @@ When patching ingestor `ingest()` functions that import `db` locally (e.g. `from
 |**Export**|`test_export.py`|Normalization, field mapping, edge cases|
 |**Serve CLI**|`test_serve.py` (639 lines)|All 13 commands, arg parsing, delegation|
 |**Original pipeline**|`test_original_pipeline.py`|Legacy orchestrator via mock|
-|**Bench scripts**|`test_bench_scripts.py` (668 lines)|Bench.py and bench_api.py scenarios, CI regression|
+|**Bench scripts**|`test_bench_scripts.py` (670 lines)|Bench.py and bench_api.py scenarios, CI regression|
 
 ### Running Tests
 

@@ -32,9 +32,9 @@ def temp_status_file(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def isolated_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Monkeypatch status.py module-level paths to isolate fixture from real data/.
+    """Monkeypatch status.py module-level path to isolate fixture from real data/.
 
-    Patches zentinull.cli.status.STATUS_FILE and ROOT so status reads/writes
+    Patches zentinull.cli.status.STATUS_FILE so status reads/writes
     target tmp_path instead of the project root.
     """
     import zentinull.cli.status as status_mod
@@ -42,7 +42,6 @@ def isolated_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(status_mod, "STATUS_FILE", data_dir / "status.json")
-    monkeypatch.setattr(status_mod, "ROOT", tmp_path)
 
 
 @pytest.fixture

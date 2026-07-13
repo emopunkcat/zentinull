@@ -120,7 +120,7 @@ class TestRunExport:
         """When export succeeds and CSV exists, returns row count (minus header)."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         csv_dir = tmp_path / "export" / "csv"
@@ -137,7 +137,7 @@ class TestRunExport:
         """When CSV is not produced by export, FileNotFoundError is raised."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         from zentinull.cli.pipeline import run_export
@@ -151,7 +151,7 @@ class TestRunExport:
         """A CSV with only a header row returns 0."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         csv_dir = tmp_path / "export" / "csv"
@@ -300,8 +300,8 @@ class TestRunLoad:
 
     CSV_HEADER = (
         "cluster_id,source,name,name_clean,serial_number,"
-        "mac_address,mac_clean,manufacturer,model,os,"
-        "assigned_user,ip_address,imei"
+        "mac_address,mac_clean,asset_tag,manufacturer,model,os,"
+        "os_version,assigned_user,ip_address,imei,extra_attributes"
     )
 
     @staticmethod
@@ -317,7 +317,9 @@ class TestRunLoad:
         """When clusters.csv doesn't exist, FileNotFoundError is raised."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
+        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
 
         from zentinull.cli.pipeline import run_load
 
@@ -328,15 +330,17 @@ class TestRunLoad:
         """When CSV exists, builds DuckDB with correct tables and returns device count."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
+        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
 
         self._create_clusters_csv(
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,ws28,ws28,SER001,aa:bb:cc:dd:ee:ff,aa:bb:cc:dd:ee:ff,Dell,Latitude,Windows,jdoe,10.0.0.1,",
-                "1,AD,WS28,ws28,SER001,,,,Dell,Latitude,Windows,jdoe,,",
-                "2,ZBX,srv-core,srv-core,SER002,,,HP,ProLiant,Linux,root,10.0.0.2,",
+                "1,FG,ws28,ws28,SER001,aa:bb:cc:dd:ee:ff,aa:bb:cc:dd:ee:ff,,Dell,Latitude,Windows,,jdoe,10.0.0.1,,",
+                "1,AD,WS28,ws28,SER001,,,,,Dell,Latitude,Windows,,jdoe,,,",
+                "2,ZBX,srv-core,srv-core,SER002,,,,HP,ProLiant,Linux,,root,10.0.0.2,,",
             ],
         )
 
@@ -384,7 +388,9 @@ class TestRunLoad:
         """A stale mesh.duckdb.tmp from a previous failed run is cleaned up before loading."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
+        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
 
         # Create a stale temp file first
         data_dir = tmp_path / "data"
@@ -395,7 +401,7 @@ class TestRunLoad:
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,node1,node1,SER001,,,,,,,,,",
+                "1,FG,node1,node1,SER001,,,,,,,,,,,",
             ],
         )
 
@@ -413,7 +419,9 @@ class TestRunLoad:
         """If SQL execution fails after connection opens, the temp DB file is removed."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
+        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
         # Replace SOURCE_RECORDS_SQL with invalid SQL to trigger a failure after connect
         monkeypatch.setattr(pipeline_mod, "SOURCE_RECORDS_SQL", "INVALID SQL STATEMENT $$$")
 
@@ -421,7 +429,7 @@ class TestRunLoad:
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,node1,node1,SER001,,,,,,,,,",
+                "1,FG,node1,node1,SER001,,,,,,,,,,,",
             ],
         )
 
@@ -441,7 +449,9 @@ class TestRunLoad:
         """When a mesh.duckdb already exists, the new load replaces it atomically."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "ROOT", tmp_path)
+        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
+        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
 
         # Create an old mesh with a marker table
         import duckdb
@@ -458,7 +468,7 @@ class TestRunLoad:
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,node1,node1,SER001,,,,,,,,,",
+                "1,FG,node1,node1,SER001,,,,,,,,,,,",
             ],
         )
 

@@ -6,22 +6,22 @@ Uses OAuth2RefreshAuth from auth.py.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import requests
 
+from ..config import ME_CLIENT_ID, ME_CLIENT_SECRET, ME_CLOUD_BASE_URL, ME_MDM_BASE_URL, ME_OAUTH_FILE
 from ..logging_config import get_logger
 from .auth import OAuth2RefreshAuth
 from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.me")
 
-CLOUD_BASE = os.environ.get("ME_CLOUD_BASE_URL", "https://endpointcentral.manageengine.com/api/1.4")
-MDM_BASE = os.environ.get("ME_MDM_BASE_URL", "https://mdm.manageengine.com/api/v1/mdm")
-CLIENT_ID = os.environ.get("ME_CLIENT_ID", "1000.I2459W43UMXFIJJY19OVDPJJNFMEOM")
-CLIENT_SECRET = os.environ.get("ME_CLIENT_SECRET", "")
-OAUTH_FILE = os.environ.get("ME_OAUTH_FILE", "data/me_oauth.json")
+CLOUD_BASE = ME_CLOUD_BASE_URL
+MDM_BASE = ME_MDM_BASE_URL
+CLIENT_ID = ME_CLIENT_ID
+CLIENT_SECRET = ME_CLIENT_SECRET
+OAUTH_FILE = ME_OAUTH_FILE
 
 
 def _me_auth() -> OAuth2RefreshAuth:
@@ -45,7 +45,7 @@ def _me_fetch(
     while True:
         page_url = f"{url}?page={page}"
         log.info({"event": "fetching", "url": page_url})
-        r = requests.get(page_url, headers=headers, timeout=60)
+        r = requests.get(page_url, headers=headers, timeout=(15, 60))
         if r.status_code == 204 or not r.text.strip():
             break
         r.raise_for_status()
@@ -66,7 +66,7 @@ def _mdm_fetch(auth: OAuth2RefreshAuth) -> list:  # type: ignore[type-arg]
     """Fetch all MDM devices."""
     headers = {"Accept": "application/json", **auth.get_headers()}
     url = f"{MDM_BASE}/devices"
-    r = requests.get(url, headers=headers, timeout=60)
+    r = requests.get(url, headers=headers, timeout=(15, 60))
     r.raise_for_status()
     return r.json()  # type: ignore[no-any-return]
 
@@ -173,8 +173,9 @@ def ingest() -> int:
     )
     if items:
         records, columns = _transform_ec_computers(items)
-        create_table(conn, "computers", columns)
-        n = insert_raw(conn, "computers", records)
+        with conn:
+            create_table(conn, "computers", columns)
+            n = insert_raw(conn, "computers", records)
         log.info({"event": "inserted", "source": "me", "table": "computers", "rows": n})
         total += n
 
@@ -182,8 +183,9 @@ def ingest() -> int:
     items = _mdm_fetch(auth)
     if items:
         records, columns = _transform_mdm_devices(items)
-        create_table(conn, "mdm_devices", columns)
-        n = insert_raw(conn, "mdm_devices", records)
+        with conn:
+            create_table(conn, "mdm_devices", columns)
+            n = insert_raw(conn, "mdm_devices", records)
         log.info({"event": "inserted", "source": "me", "table": "mdm_devices", "rows": n})
         total += n
 

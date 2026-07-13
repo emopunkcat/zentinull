@@ -7,21 +7,21 @@ Uses separate SDP OAuth token file.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import requests
 
+from ..config import SDP_BASE_URL, SDP_CLIENT_ID, SDP_CLIENT_SECRET, SDP_OAUTH_FILE
 from ..logging_config import get_logger
 from .auth import OAuth2RefreshAuth
 from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.sdp")
 
-SDP_BASE = os.environ.get("SDP_BASE_URL", "https://sdpondemand.manageengine.com")
-CLIENT_ID = os.environ.get("SDP_CLIENT_ID", "1000.I2459W43UMXFIJJY19OVDPJJNFMEOM")
-CLIENT_SECRET = os.environ.get("SDP_CLIENT_SECRET", "")
-OAUTH_FILE = os.environ.get("SDP_OAUTH_FILE", "data/sdp_oauth.json")
+SDP_BASE = SDP_BASE_URL
+CLIENT_ID = SDP_CLIENT_ID
+CLIENT_SECRET = SDP_CLIENT_SECRET
+OAUTH_FILE = SDP_OAUTH_FILE
 SDP_ACCEPT = "application/vnd.manageengine.sdp.v3+json"
 
 TABLES = {
@@ -83,7 +83,7 @@ def _sdp_fetch(
     headers["Accept"] = SDP_ACCEPT
     url = f"{SDP_BASE}{endpoint}"
     try:
-        r = requests.get(url, headers=headers, timeout=30)
+        r = requests.get(url, headers=headers, timeout=(15, 30))
         r.raise_for_status()
         data = r.json()
         return data.get(response_path, [])  # type: ignore[no-any-return]
@@ -136,8 +136,9 @@ def ingest() -> int:
             log.info({"event": "empty", "source": "sdp", "table": tname})
             continue
         records = _transform_tabular(items, tdef["cols"])  # type: ignore[arg-type]
-        create_table(conn, tname, tdef["cols"])  # type: ignore[arg-type]
-        n = insert_raw(conn, tname, records)
+        with conn:
+            create_table(conn, tname, tdef["cols"])  # type: ignore[arg-type]
+            n = insert_raw(conn, tname, records)
         log.info({"event": "inserted", "source": "sdp", "table": tname, "rows": n})
         total += n
 

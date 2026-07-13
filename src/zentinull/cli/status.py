@@ -1,42 +1,61 @@
-"""Pipeline status tracker — JSON-based, thread-safe.
+"""Pipeline status tracker — JSON-based, process-safe.
 
 Records last run time, row counts, success/failure per stage,
-and data freshness per source to data/status.json.
+and data freshness per source to data/status.json.  Uses fcntl.flock
+for cross-process safety.
 """
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
-import threading
+import os
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 
-ROOT = Path(__file__).resolve().parent.parent.parent.parent
-STATUS_FILE = ROOT / "data" / "status.json"
-
-_lock = threading.Lock()
-
+from ..config import STATUS_FILE
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
 def _read() -> dict[str, Any]:
-    """Read the status file, returning default empty structure if it doesn't exist."""
-    if STATUS_FILE.exists():
-        try:
-            return cast(dict[str, Any], json.loads(STATUS_FILE.read_text()))
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"stages": {}, "freshness": {}}
+    """Read the status file with shared lock, returning default empty structure on error."""
+    try:
+        fd = os.open(str(STATUS_FILE), os.O_RDONLY)
+    except FileNotFoundError:
+        return {"stages": {}, "freshness": {}}
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        return cast(dict[str, Any], json.loads(os.read(fd, 1_000_000).decode()))
+    except (json.JSONDecodeError, OSError):
+        return {"stages": {}, "freshness": {}}
+    finally:
+        os.close(fd)
 
 
-def _write(data: dict[str, Any]) -> None:
-    """Atomically write the status file."""
+@contextlib.contextmanager
+def _lock_and_update() -> Any:
+    """Acquire exclusive lock on the status file, read, yield for update, and write back."""
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATUS_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
-    tmp.replace(STATUS_FILE)
+    fd = os.open(str(STATUS_FILE), os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            content = os.read(fd, 1_000_000).decode("utf-8").strip()
+            data = json.loads(content) if content else {"stages": {}, "freshness": {}}
+        except (json.JSONDecodeError, ValueError):
+            data = {"stages": {}, "freshness": {}}
+
+        yield data
+
+        new_content = json.dumps(data, indent=2, default=str).encode("utf-8")
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, new_content)
+        os.ftruncate(fd, len(new_content))
+    finally:
+        os.close(fd)
 
 
 def _ms_since(iso_str: str) -> int:
@@ -57,10 +76,8 @@ def record_start(stage: str) -> None:
     Writes the current UTC timestamp as ``last_run`` and sets status to ``running``.
     """
     now = datetime.now(UTC).isoformat()
-    with _lock:
-        data = _read()
+    with _lock_and_update() as data:
         data.setdefault("stages", {})[stage] = {"last_run": now, "status": "running"}
-        _write(data)
 
 
 def record_done(stage: str, **stats: int | str) -> None:
@@ -70,8 +87,7 @@ def record_done(stage: str, **stats: int | str) -> None:
     Duration is computed from the last ``record_start`` timestamp for this stage.
     """
     now = datetime.now(UTC).isoformat()
-    with _lock:
-        data = _read()
+    with _lock_and_update() as data:
         stage_data = data.setdefault("stages", {}).setdefault(stage, {})
         last_run = stage_data.get("last_run", "")
         stage_data.update(
@@ -85,14 +101,12 @@ def record_done(stage: str, **stats: int | str) -> None:
             stage_data.update(stats)
         if stage == "load":
             data["last_full_pipeline"] = now
-        _write(data)
 
 
 def record_fail(stage: str, error: str) -> None:
     """Record stage failure with an error message."""
     now = datetime.now(UTC).isoformat()
-    with _lock:
-        data = _read()
+    with _lock_and_update() as data:
         stage_data = data.setdefault("stages", {}).setdefault(stage, {})
         last_run = stage_data.get("last_run", "")
         stage_data.update(
@@ -103,7 +117,6 @@ def record_fail(stage: str, error: str) -> None:
                 "duration_ms": _ms_since(last_run),
             }
         )
-        _write(data)
 
 
 def record_freshness(source: str, newest_record: str, row_count: int) -> None:
@@ -114,13 +127,11 @@ def record_freshness(source: str, newest_record: str, row_count: int) -> None:
         newest_record: ISO timestamp of the newest record from this source.
         row_count: Total rows ingested for this source.
     """
-    with _lock:
-        data = _read()
+    with _lock_and_update() as data:
         data.setdefault("freshness", {})[source] = {
             "newest_record": newest_record,
             "row_count": row_count,
         }
-        _write(data)
 
 
 def get_status() -> dict[str, Any]:

@@ -32,6 +32,11 @@ services:
       - ./export:/app/export
     environment:
       - PYTHONDONTWRITEBYTECODE=1
+    env_file: .env
+    # ── Auth env vars (set in .env, commented examples):
+    # AD_PASSWORD, AD_SERVER, FG_API_KEY, FG_HOST, FG_PORT
+    # ME_CLIENT_SECRET, SDP_CLIENT_SECRET, ZBX_TOKEN
+
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
       interval: 5s

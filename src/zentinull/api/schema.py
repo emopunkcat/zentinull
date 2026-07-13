@@ -17,11 +17,18 @@ from __future__ import annotations
 
 import duckdb
 
+from ..contracts import SPLINK_FIELDS
+
 #: SQL to create source_records from a clusters CSV file (takes one ? param for file path)
 SOURCE_RECORDS_SQL = """
 CREATE OR REPLACE TABLE source_records AS
 SELECT * FROM read_csv_auto(?)
 """
+
+#: Column types for explicit DuckDB read_csv — keeps schema in sync
+#: with SPLINK_FIELDS. Defaults to VARCHAR; set to None for auto-detect per column.
+#: Reserved for future explicit-typing migration in create_mesh_tables().
+SPLINK_COLS: dict[str, str | None] = {f: None for f in SPLINK_FIELDS}
 
 #: Build the consolidated devices table from source_records
 DEVICES_SQL = """
@@ -40,6 +47,8 @@ SELECT
     COALESCE(NULLIF(MIN(CASE WHEN manufacturer != '' THEN manufacturer END), ''), '') AS manufacturer,
     COALESCE(NULLIF(MIN(CASE WHEN model != '' THEN model END), ''), '') AS model,
     COALESCE(NULLIF(MIN(CASE WHEN os != '' THEN os END), ''), '') AS os,
+    COALESCE(NULLIF(MIN(CASE WHEN os_version != '' THEN os_version END), ''), '') AS os_version,
+    COALESCE(NULLIF(MIN(CASE WHEN asset_tag != '' THEN asset_tag END), ''), '') AS asset_tag,
     COALESCE(NULLIF(MIN(CASE WHEN assigned_user != '' THEN assigned_user END), ''), '') AS assigned_user,
     COALESCE(NULLIF(MIN(CASE WHEN ip_address != '' THEN ip_address END), ''), '') AS ip_address,
     COALESCE(NULLIF(MIN(CASE WHEN imei != '' THEN imei END), ''), '') AS imei,

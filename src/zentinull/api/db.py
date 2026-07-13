@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +32,15 @@ class MeshDB:
 
     def __init__(self, db_path: Path) -> None:
         self._path = db_path
+
+    def ping(self) -> bool:
+        """Validate database connectivity."""
+        try:
+            with self._conn() as conn:
+                conn.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     def _conn(self) -> duckdb.DuckDBPyConnection:
         conn = duckdb.connect(str(self._path), read_only=True)
@@ -181,30 +191,43 @@ class MeshDB:
 
         for r in rows:
             rd = dict(zip(sr_cols, r, strict=True))
+            extra_raw = _safe(rd.get("extra_attributes"))
+            extra_attrs: dict[str, Any] = {}
+            if extra_raw:
+                try:
+                    parsed = json.loads(extra_raw)
+                    if isinstance(parsed, dict):
+                        extra_attrs = cast(dict[str, Any], parsed)
+                except (json.JSONDecodeError, TypeError):
+                    pass
             recs.append(
                 SourceRecord(
                     source=_safe(rd.get("source")),
                     source_id=_safe(rd.get("source_id")),
                     name=_safe(rd.get("name")),
+                    name_clean=_safe(rd.get("name_clean")),
                     serial_number=_safe(rd.get("serial_number")),
                     mac_address=_safe(rd.get("mac_address")),
                     mac_clean=_safe(rd.get("mac_clean")),
                     manufacturer=_safe(rd.get("manufacturer")),
                     model=_safe(rd.get("model")),
+                    os_version=_safe(rd.get("os_version")),
+                    asset_tag=_safe(rd.get("asset_tag")),
                     os=_safe(rd.get("os")),
                     assigned_user=_safe(rd.get("assigned_user")),
                     ip_address=_safe(rd.get("ip_address")),
                     imei=_safe(rd.get("imei")),
+                    extra_attributes=extra_attrs,
                 )
             )
-
-        # Build consolidated from device table (already deduplicated)
         for field in [
             "serial_number",
             "mac_address",
             "manufacturer",
             "model",
             "os",
+            "os_version",
+            "asset_tag",
             "assigned_user",
             "ip_address",
             "imei",
@@ -217,27 +240,36 @@ class MeshDB:
         name = _safe(dev_dict.get("device_name", ""))
         if name:
             consolidated["name_clean"] = [name]
-
-        # Merge in per-source values that differ (for display)
-        for field in ["serial_number", "mac_clean", "manufacturer", "model", "os", "assigned_user", "ip_address"]:
+        for field in [
+            "serial_number",
+            "mac_clean",
+            "manufacturer",
+            "model",
+            "os",
+            "os_version",
+            "asset_tag",
+            "assigned_user",
+            "ip_address",
+        ]:
+            # Merge in per-source values that differ (for display)
             if field == "mac_clean":
                 field_src = "mac_clean"
-            elif field == "mac_address":
-                continue
+                field_key = "mac_address"
             else:
                 field_src = field
+                field_key = field
             vals = []
             for r in rows:
                 rd = dict(zip(sr_cols, r, strict=True))
                 v = _safe(rd.get(field_src, ""))
                 if v and v not in vals:
                     vals.append(v)
-            existing = consolidated.get(field, [])
+            existing = consolidated.get(field_key, [])
             for v in vals:
                 if v not in existing:
                     existing.append(v)
             if existing:
-                consolidated[field] = existing
+                consolidated[field_key] = existing
 
         return DeviceStory(
             query=query,
@@ -258,7 +290,6 @@ class MeshDB:
         conn = self._conn()
         try:
             if field:
-                # Validate field exists
                 valid = {
                     "name_clean",
                     "serial_number",
@@ -268,10 +299,11 @@ class MeshDB:
                     "manufacturer",
                     "model",
                     "os",
+                    "os_version",
+                    "asset_tag",
                     "imei",
                     "source",
                     "source_id",
-                    "asset_tag",
                 }
                 if field not in valid:
                     field = "device_name" if field == "name" else field
@@ -293,12 +325,14 @@ class MeshDB:
                        OR lower(d.manufacturer) LIKE ?
                        OR lower(d.model) LIKE ?
                        OR lower(d.os) LIKE ?
+                       OR lower(d.os_version) LIKE ?
                        OR lower(d.assigned_user) LIKE ?
                        OR lower(d.ip_address) LIKE ?
+                       OR lower(d.asset_tag) LIKE ?
                     ORDER BY d.source_count DESC
                     LIMIT ?
                 """,
-                    [ql, ql, ql, ql, ql, ql, ql, ql, limit],
+                    [ql, ql, ql, ql, ql, ql, ql, ql, ql, ql, limit],
                 ).fetchall()
 
             cols = [d[0] for d in conn.description]
@@ -646,7 +680,10 @@ class MeshDB:
             manufacturer=_safe(row.get("manufacturer")),
             model=_safe(row.get("model")),
             os=_safe(row.get("os")),
+            os_version=_safe(row.get("os_version")),
+            asset_tag=_safe(row.get("asset_tag")),
             assigned_user=_safe(row.get("assigned_user")),
             ip_address=_safe(row.get("ip_address")),
+            imei=_safe(row.get("imei")),
             record_count=int(_safe(row.get("record_count", "0")) or 0),
         )

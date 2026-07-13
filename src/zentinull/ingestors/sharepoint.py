@@ -5,17 +5,18 @@ Auto-detects columns from actual API response.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import requests
 
+from ..config import N8N_BASE_URL, SHAREPOINT_BASE_URL
 from ..logging_config import get_logger
 from .base import create_table, db, insert_raw
 
 log = get_logger("ingest.sp")
 
-N8N_BASE = os.environ.get("SHAREPOINT_BASE_URL", "http://192.168.20.56:5678/webhook")
+
+N8N_BASE = N8N_BASE_URL or SHAREPOINT_BASE_URL
 
 ENDPOINTS = [
     "sp_devices",
@@ -81,7 +82,7 @@ def ingest() -> int:
         url = f"{N8N_BASE}/{endpoint}"
         log.info({"event": "fetching", "url": url})
         try:
-            r = requests.get(url, timeout=60)
+            r = requests.get(url, timeout=(10, 30))
             r.raise_for_status()
             items = r.json()
             if not items:
@@ -89,8 +90,9 @@ def ingest() -> int:
                 continue
 
             records, san_cols = _transform_sharepoint(items)
-            create_table(conn, endpoint, san_cols)
-            n = insert_raw(conn, endpoint, records)
+            with conn:
+                create_table(conn, endpoint, san_cols)
+                n = insert_raw(conn, endpoint, records)
             log.info({"event": "inserted", "source": "sp", "endpoint": endpoint, "rows": n})
             total += n
         except Exception as e:
