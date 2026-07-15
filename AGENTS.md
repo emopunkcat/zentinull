@@ -70,9 +70,7 @@ Core design rule: **ingest and entity resolution are cleanly separated**. Ingest
 - `scripts/*.py` — standalone entry points for individual stages
 - `dashboard.py` — Streamlit app triggered via `streamlit run dashboard.py`
 
-**Two pipeline orchestrators:**
-1. `src/zentinull/pipeline.py` (original) — subprocess-based, shells out to scripts
-2. `src/zentinull/cli/pipeline.py` (modern) — in-process ingest/export, streaming subprocess for Splink, temp-and-swap atomic DuckDB load
+**Pipeline orchestrator:** `src/zentinull/cli/pipeline.py` — in-process ingest/export, streaming subprocess for Splink, temp-and-swap atomic DuckDB load.
 
 Benchmarking: `scripts/bench.py` (pytest timing + coverage, historical trend) and `scripts/bench_api.py` (per-endpoint timing of 14 endpoints against seeded TestClient, regression gate) — both persist to `.benchmarks/`.
 
@@ -129,7 +127,7 @@ make run-ingest        # Run all 6 ingestors (requires .env)
 make run-splink        # Splink entity resolution (requires devices.csv)
 make build-training    # Build training label set
 make run-pipeline      # Full pipeline: ingest → export → splink → load
-make run-api           # uvicorn on port 8001
+make run-api           # serve.py start on port 8001
 make run-all           # pipeline + API in background
 
 make bench             # pytest timing + coverage
@@ -230,7 +228,6 @@ Key rules: one table per source, raw JSON stored in `raw_json` column, no dedup,
 
 - **Ingestors**: per-endpoint `try/except`, log error as structured event, continue to next endpoint.
 - **Pipeline (CLI, modern)**: `run_streaming()` raises `RuntimeError` on non-zero exit or timeout; ingest runs in-process with per-source `try/except`.
-- **Pipeline (original)**: `_run_step()` wraps `subprocess.run()` — raises `RuntimeError` on non-zero exit.
 - **API routers**: `_db()` raises `HTTPException(503)` if DuckDB unavailable; `_resolve_cluster()` raises `HTTPException(404)` if not found.
 - **No dead letter tables** — malformed records logged and skipped.
 - **Status tracking**: `cli/status.py` records `start`/`done`/`fail` per stage, readable by dashboard.
@@ -285,14 +282,6 @@ def _conn(self) -> duckdb.DuckDBPyConnection:
 
 All stages call `cli/status.py` functions (`record_start`, `record_done`, `record_fail`) to update `data/status.json`. The Streamlit dashboard reads this file for live pipeline status.
 
-### Pipeline Invocation (original, legacy)
-
-`pipeline.py` orchestrates via mixed invocation:
-- **Scripts** (`scripts/run_ingest.py`): direct file path via `subprocess.run`
-- **Package module** (`zentinull.export_for_splink`): `-m` flag via subprocess (must use `-m` for relative imports to work)
-- **DuckDB load**: in-process (direct import, no subprocess), non-atomic direct write
-- **Splink**: subprocess with 300s timeout
-
 ### Status Tracking
 
 `cli/status.py` provides thread-safe JSON status tracking:
@@ -334,7 +323,6 @@ Pure functions returning `(records, columns)` tuples. No I/O in transforms. Used
 |`.env.example`|Required env vars — 5 source auth blocks + server config|
 |`serve.py`|Unified CLI — 13 subcommands, lazy imports inside `cmd_*` functions|
 |`dashboard.py`|Streamlit app — pipeline KPIs, device search, cluster explorer|
-|`src/zentinull/pipeline.py`|Original 4-stage orchestrator (subprocess-based, legacy)|
 |`src/zentinull/cli/pipeline.py`|Modern in-process pipeline with atomic DuckDB load + status tracking|
 |`src/zentinull/cli/streaming.py`|`run_streaming()` — subprocess with live output + rotating log|
 |`src/zentinull/cli/status.py`|`record_start/done/fail/freshness()`, `get_status()`, `print_status()`|
@@ -347,7 +335,7 @@ Pure functions returning `(records, columns)` tuples. No I/O in transforms. Used
 |`src/zentinull/ingestors/base.py`|`db()`, `create_table()`, `insert()`, `insert_raw()` — SQLite helpers|
 |`src/zentinull/ingestors/auth.py`|`APIKeyAuth`, `OAuth2RefreshAuth`, `LDAPBindAuth`|
 |`src/zentinull/export_for_splink.py`|Unified CSV export with `SPLINK_FIELDS` and `FIELD_MAP`|
-|`src/zentinull/api/server.py`|FastAPI app, CORS, lifespan, request ID middleware, dotenv loading, uvicorn on port 8001|
+|`src/zentinull/api/server.py`|FastAPI app, CORS, lifespan, request ID middleware, dotenv loading — started via `serve.py start`|
 |`src/zentinull/api/router.py`|14 REST endpoints (incl. /metrics, /health enhanced), inline HTML device viewer|
 |`src/zentinull/api/db.py`|`MeshDB` — DuckDB query layer (690 lines), 7-step cluster resolution cascade|
 |`src/zentinull/api/models.py`|8 frozen Pydantic models (`SourceRecord`, `ClusterInfo`, `DeviceStory`, `MetricRecord`, `EventRecord`, `MeshStats`, `DashboardStats`, `AnomaliesReport`)|
@@ -376,7 +364,7 @@ Pure functions returning `(records, columns)` tuples. No I/O in transforms. Used
 |**CI**|4 jobs: lint → typecheck → test+cov → benchmark regression gate|
 |**Core databases**|SQLite (per-source, WAL mode), DuckDB (mesh, read-only queries)|
 |**Entity Resolution**|Splink 4.x (Python package)|
-|**API server**|uvicorn on `0.0.0.0:8001`|
+|**API server**|`serve.py start` on `0.0.0.0:8001` (configurable via `ZENTINULL_HOST`/`ZENTINULL_PORT`)|
 |**Dashboard**|Streamlit on port 8501 (auto-assigned)|
 |**Docker**|Multi-stage build on `python:3.12-slim`, dev stage with `--reload` and volume mounts|
 |**Docker Compose**|3 services: `api`, `dashboard`, `demo` (seeding, profile-gated)|
@@ -450,7 +438,6 @@ When patching ingestor `ingest()` functions that import `db` locally (e.g. `from
 |**Logging**|`test_setup.py` + `test_formatters.py`|Setup modes, formatters, StepTimer|
 |**Export**|`test_export.py`|Normalization, field mapping, edge cases|
 |**Serve CLI**|`test_serve.py` (639 lines)|All 13 commands, arg parsing, delegation|
-|**Original pipeline**|`test_original_pipeline.py`|Legacy orchestrator via mock|
 |**Bench scripts**|`test_bench_scripts.py` (670 lines)|Bench.py and bench_api.py scenarios, CI regression|
 
 ### Running Tests

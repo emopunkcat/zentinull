@@ -14,6 +14,26 @@ def _make_args(**kwargs: object) -> argparse.Namespace:
     return argparse.Namespace(**kwargs)
 
 
+def _make_paths(tmp_path: Path):
+    """Build a ProjectPaths pointing at tmp_path for test isolation."""
+    from zentinull.config import ProjectPaths
+
+    data_dir = tmp_path / "data"
+    export_dir = tmp_path / "export"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return ProjectPaths(
+        project="test",
+        data_dir=data_dir,
+        export_dir=export_dir,
+        mesh_path=data_dir / "mesh.duckdb",
+        status_file=data_dir / "status.json",
+        log_file=data_dir / "pipeline.log",
+        csv_dir=export_dir / "csv",
+        splink_output_dir=export_dir / "splink_output",
+        benchmarks_dir=tmp_path / ".benchmarks",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # cmd_status — delegates to print_status
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -39,30 +59,31 @@ class TestCmdStatus:
 class TestCmdLogs:
     """cmd_logs reads data/pipeline.log and prints tail lines."""
 
-    def test_logs_no_file_exists(self, tmp_path: Path, capsys) -> None:
+    def test_logs_no_file_exists(self, tmp_path: Path, capsys, monkeypatch) -> None:
         """When log file doesn't exist, a message is printed."""
         from serve import cmd_logs
 
-        with patch("serve._HERE", tmp_path):
-            args = _make_args(follow=False, lines=10)
-            cmd_logs(args)
+        _paths = _make_paths(tmp_path)
+        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        args = _make_args(follow=False, lines=10)
+        cmd_logs(args)
 
         captured = capsys.readouterr()
         assert "No pipeline log found" in captured.out
 
-    def test_logs_prints_tail_lines(self, tmp_path: Path, capsys) -> None:
+    def test_logs_prints_tail_lines(self, tmp_path: Path, capsys, monkeypatch) -> None:
         """When log exists, the last N lines are printed."""
         from serve import cmd_logs
 
-        log_dir = tmp_path / "data"
-        log_dir.mkdir()
-        log_file = log_dir / "pipeline.log"
+        _paths = _make_paths(tmp_path)
+        log_file = _paths.log_file
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         lines = [f"line {i}" for i in range(20)]
         log_file.write_text("\n".join(lines) + "\n")
 
-        with patch("serve._HERE", tmp_path):
-            args = _make_args(follow=False, lines=5)
-            cmd_logs(args)
+        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        args = _make_args(follow=False, lines=5)
+        cmd_logs(args)
 
         captured = capsys.readouterr()
         output = captured.out.strip().splitlines()
@@ -70,35 +91,36 @@ class TestCmdLogs:
         assert output[0] == "line 15"
         assert output[-1] == "line 19"
 
-    def test_logs_uses_default_lines(self, tmp_path: Path, capsys) -> None:
+    def test_logs_uses_default_lines(self, tmp_path: Path, capsys, monkeypatch) -> None:
         """Default lines=50 when not specified."""
         from serve import cmd_logs
 
-        log_dir = tmp_path / "data"
-        log_dir.mkdir()
-        log_file = log_dir / "pipeline.log"
+        _paths = _make_paths(tmp_path)
+        log_file = _paths.log_file
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.write_text("\n".join(f"line {i}" for i in range(60)) + "\n")
 
-        with patch("serve._HERE", tmp_path):
-            args = _make_args(follow=False, lines=50)
-            cmd_logs(args)
+        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        args = _make_args(follow=False, lines=50)
+        cmd_logs(args)
 
         captured = capsys.readouterr()
         output = captured.out.strip().splitlines()
         assert len(output) == 50
         assert output[0] == "line 10"
 
-    def test_logs_empty_file(self, tmp_path: Path, capsys) -> None:
+    def test_logs_empty_file(self, tmp_path: Path, capsys, monkeypatch) -> None:
         """Empty log file prints nothing."""
         from serve import cmd_logs
 
-        log_dir = tmp_path / "data"
-        log_dir.mkdir()
-        (log_dir / "pipeline.log").write_text("")
+        _paths = _make_paths(tmp_path)
+        log_file = _paths.log_file
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text("")
 
-        with patch("serve._HERE", tmp_path):
-            args = _make_args(follow=False, lines=10)
-            cmd_logs(args)
+        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        args = _make_args(follow=False, lines=10)
+        cmd_logs(args)
 
         captured = capsys.readouterr()
         assert captured.out.strip() == ""
@@ -375,6 +397,7 @@ class TestCmdStart:
 
     def test_cmd_start_passes_args(self) -> None:
         from serve import cmd_start
+        from zentinull.config import API_HOST
 
         with (
             patch("uvicorn.run") as mock_uvicorn,
@@ -384,13 +407,14 @@ class TestCmdStart:
             cmd_start(args)
             mock_uvicorn.assert_called_once_with(
                 "zentinull.api.server:app",
-                host="0.0.0.0",
+                host=API_HOST,
                 port=9000,
                 reload=True,
             )
 
     def test_cmd_start_default_port(self) -> None:
         from serve import cmd_start
+        from zentinull.config import API_HOST
 
         with (
             patch("uvicorn.run") as mock_uvicorn,
@@ -400,7 +424,7 @@ class TestCmdStart:
             cmd_start(args)
             mock_uvicorn.assert_called_once_with(
                 "zentinull.api.server:app",
-                host="0.0.0.0",
+                host=API_HOST,
                 port=8001,
                 reload=False,
             )
@@ -636,3 +660,21 @@ class TestCmdBenchApi:
                 main()
             mock_cmd.assert_called_once()
             assert mock_cmd.call_args[0][0].ci is True
+
+
+def test_main_project_flag_sets_env(monkeypatch) -> None:
+    """--project demo sets ZENTINULL_PROJECT before load_manifest triggers config import."""
+    import os
+    from unittest.mock import MagicMock
+
+    import zentinull.manifest
+    from serve import main
+
+    monkeypatch.delenv("ZENTINULL_PROJECT", raising=False)
+    mock_manifest = MagicMock()
+    mock_manifest.systems.keys.return_value = []
+    monkeypatch.setattr(zentinull.manifest, "load_manifest", lambda: mock_manifest)
+    with patch("serve.cmd_status"), patch("sys.argv", ["serve.py", "--project", "demo", "status"]):
+        main()
+    assert os.environ.get("ZENTINULL_PROJECT") == "demo"
+    os.environ.pop("ZENTINULL_PROJECT", None)

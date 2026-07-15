@@ -130,6 +130,20 @@ class TestSearch:
         ids = [r.cluster_id for r in results]
         assert ids == ["c1"]
 
+    def test_unknown_field_falls_back_to_full_text(self, seeded_meshdb: MeshDB) -> None:
+        """An unknown field name is ignored (full-text), never interpolated raw into SQL."""
+        # 'dell' matches c1 by manufacturer under full-text; a bogus field must not error.
+        results = seeded_meshdb.search("dell", field="not_a_real_column")
+        ids = [r.cluster_id for r in results]
+        assert "c1" in ids
+
+    def test_field_injection_is_neutralized(self, seeded_meshdb: MeshDB) -> None:
+        """A SQL-injection payload in field neither errors nor leaks — treated as unknown."""
+        payload = "device_name) LIKE '%' OR lower(serial_number"
+        results = seeded_meshdb.search("zzz-no-match", field=payload)
+        # Full-text fallback with a non-matching query yields nothing; no injection widened it.
+        assert results == []
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # dashboard()
@@ -252,6 +266,12 @@ class TestListClusters:
         # Sorted by source_count DESC then device_name: c1 (3), c2 (2)
         assert page1[0].cluster_id == "c1"
         assert page1[1].cluster_id == "c2"
+
+    def test_source_filter_is_parameterized(self, seeded_meshdb: MeshDB) -> None:
+        """A source value containing a quote is bound as a parameter, not injected — no crash, no match."""
+        total, results = seeded_meshdb.list_clusters(source="sp' OR '1'='1")
+        assert total == 0
+        assert results == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

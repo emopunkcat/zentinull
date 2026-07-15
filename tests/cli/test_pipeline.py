@@ -10,6 +10,45 @@ from typing import Any
 
 import pytest
 
+from zentinull.config import ProjectPaths
+
+
+def _make_paths(tmp_path: Path) -> ProjectPaths:
+    """Create a ProjectPaths instance pointing at tmp_path subdirectories."""
+    data_dir = tmp_path / "data"
+    export_dir = tmp_path / "export"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return ProjectPaths(
+        project="test",
+        data_dir=data_dir,
+        export_dir=export_dir,
+        mesh_path=data_dir / "mesh.duckdb",
+        status_file=data_dir / "status.json",
+        log_file=data_dir / "pipeline.log",
+        csv_dir=export_dir / "csv",
+        splink_output_dir=export_dir / "splink_output",
+        benchmarks_dir=tmp_path / ".benchmarks",
+    )
+
+
+def _paths_from_data_dir(data_dir: Path) -> ProjectPaths:
+    """Create a ProjectPaths instance from an existing data_dir."""
+    export_dir = data_dir.parent / "export"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return ProjectPaths(
+        project="test",
+        data_dir=data_dir,
+        export_dir=export_dir,
+        mesh_path=data_dir / "mesh.duckdb",
+        status_file=data_dir / "status.json",
+        log_file=data_dir / "pipeline.log",
+        csv_dir=export_dir / "csv",
+        splink_output_dir=export_dir / "splink_output",
+        benchmarks_dir=data_dir.parent / ".benchmarks",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # run_ingest
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -22,30 +61,29 @@ class TestRunIngest:
     """
 
     def _patch_ingestors(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Monkeypatch all 6 ingestor .ingest() to return known counts without live APIs."""
-        import zentinull.ingestors.ad as ad_mod
-        import zentinull.ingestors.fortigate as fg_mod
-        import zentinull.ingestors.manageengine as me_mod
-        import zentinull.ingestors.servicedeskplus as sdp_mod
-        import zentinull.ingestors.sharepoint as sp_mod
-        import zentinull.ingestors.zabbix as zbx_mod
+        """Patch the adapter's runner.run_system so ingest is network-free and deterministic.
 
-        monkeypatch.setattr(sp_mod, "ingest", lambda: 42)
-        monkeypatch.setattr(me_mod, "ingest", lambda: 100)
-        monkeypatch.setattr(fg_mod, "ingest", lambda: 200)
-        monkeypatch.setattr(zbx_mod, "ingest", lambda: 75)
-        monkeypatch.setattr(ad_mod, "ingest", lambda: 50)
-        monkeypatch.setattr(sdp_mod, "ingest", lambda: 30)
+        run_ingest() delegates to ingest_adapter.run_ingest → runner.run_system(system_key, manifest),
+        which returns a per-feed dict. We stub per-system counts keyed by the system's anchor feed.
+        """
+        import zentinull.ingest_adapter as adapter_mod
+
+        counts = {"sp": 42, "me": 100, "fg": 200, "zbx": 75, "ad": 50, "sdp": 30}
+
+        def _fake_run_system(system_key: str, manifest: Any, **kwargs: Any) -> dict[str, int]:
+            return {f"{system_key}_feed": counts.get(system_key, 0)}
+
+        monkeypatch.setattr(adapter_mod, "run_system", _fake_run_system)
 
     def test_runs_all_sources(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
         """When sources=None, all 6 sources run and return counts."""
         self._patch_ingestors(monkeypatch)
-        from zentinull.cli.pipeline import SOURCE_MAP, run_ingest
+        from zentinull.cli.pipeline import _SOURCE_MAP, run_ingest
 
         result = run_ingest()
 
         assert isinstance(result, dict)
-        assert len(result) == len(SOURCE_MAP)
+        assert len(result) == len(_SOURCE_MAP)
         for name, count in result.items():
             assert count >= 0, f"{name} failed with count {count}"
 
@@ -74,10 +112,14 @@ class TestRunIngest:
 
     def test_ingestor_error_returns_negative_one(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
         """When an ingestor raises, its row count is -1 and other sources continue."""
-        self._patch_ingestors(monkeypatch)
-        import zentinull.ingestors.sharepoint as sp_mod
+        import zentinull.ingest_adapter as adapter_mod
 
-        monkeypatch.setattr(sp_mod, "ingest", lambda: (_ for _ in ()).throw(ValueError("API down")))
+        def _raise_for_sp(system_key: str, manifest: Any, **kwargs: Any) -> dict[str, int]:
+            if system_key == "sp":
+                raise ValueError("API down")
+            return {f"{system_key}_feed": 200}
+
+        monkeypatch.setattr(adapter_mod, "run_system", _raise_for_sp)
         from zentinull.cli.pipeline import run_ingest
 
         result = run_ingest()
@@ -98,11 +140,11 @@ class TestRunIngest:
     def test_empty_skip_sources(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
         """skip_sources=None runs all sources (no skip)."""
         self._patch_ingestors(monkeypatch)
-        from zentinull.cli.pipeline import SOURCE_MAP, run_ingest
+        from zentinull.cli.pipeline import _SOURCE_MAP, run_ingest
 
         result = run_ingest(skip_sources=None)
 
-        assert len(result) == len(SOURCE_MAP)
+        assert len(result) == len(_SOURCE_MAP)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -120,7 +162,7 @@ class TestRunExport:
         """When export succeeds and CSV exists, returns row count (minus header)."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         csv_dir = tmp_path / "export" / "csv"
@@ -137,7 +179,7 @@ class TestRunExport:
         """When CSV is not produced by export, FileNotFoundError is raised."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         from zentinull.cli.pipeline import run_export
@@ -151,7 +193,7 @@ class TestRunExport:
         """A CSV with only a header row returns 0."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         csv_dir = tmp_path / "export" / "csv"
@@ -317,9 +359,7 @@ class TestRunLoad:
         """When clusters.csv doesn't exist, FileNotFoundError is raised."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
-        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         from zentinull.cli.pipeline import run_load
 
@@ -330,9 +370,7 @@ class TestRunLoad:
         """When CSV exists, builds DuckDB with correct tables and returns device count."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
-        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         self._create_clusters_csv(
             tmp_path,
@@ -388,9 +426,7 @@ class TestRunLoad:
         """A stale mesh.duckdb.tmp from a previous failed run is cleaned up before loading."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
-        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         # Create a stale temp file first
         data_dir = tmp_path / "data"
@@ -419,9 +455,7 @@ class TestRunLoad:
         """If SQL execution fails after connection opens, the temp DB file is removed."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
-        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
         # Replace SOURCE_RECORDS_SQL with invalid SQL to trigger a failure after connect
         monkeypatch.setattr(pipeline_mod, "SOURCE_RECORDS_SQL", "INVALID SQL STATEMENT $$$")
 
@@ -449,9 +483,7 @@ class TestRunLoad:
         """When a mesh.duckdb already exists, the new load replaces it atomically."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "SPLINK_OUTPUT_DIR", tmp_path / "export" / "splink_output")
-        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         # Create an old mesh with a marker table
         import duckdb
@@ -486,6 +518,145 @@ class TestRunLoad:
             assert "source_records" in tables
         finally:
             new_conn.close()
+
+    def test_load_zbx_items_into_metrics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any
+    ) -> None:
+        """Zabbix items from zbx.sqlite are loaded into the metrics table during run_load."""
+        import sqlite3
+
+        # Create zbx.sqlite with hosts and items tables
+        zbx_dir = tmp_path / "data"
+        zbx_dir.mkdir(parents=True, exist_ok=True)
+        zbx_db = zbx_dir / "zbx.sqlite"
+        conn = sqlite3.connect(str(zbx_db))
+        conn.execute(
+            "CREATE TABLE hosts (id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, "
+            "raw_json TEXT NOT NULL, raw_hash TEXT NOT NULL, "
+            "remote_updated_at TEXT, fetched_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO hosts (source_id, raw_json, raw_hash) VALUES (?, ?, ?)",
+            ("101", '{"hostid":"101","host":"srv-core","name":"srv-core"}', "h1"),
+        )
+        conn.execute(
+            "INSERT INTO hosts (source_id, raw_json, raw_hash) VALUES (?, ?, ?)",
+            ("102", '{"hostid":"102","host":"ws30","name":"ws30"}', "h2"),
+        )
+        conn.execute(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, "
+            "raw_json TEXT NOT NULL, raw_hash TEXT NOT NULL, "
+            "remote_updated_at TEXT, fetched_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO items (source_id, raw_json, raw_hash) VALUES (?, ?, ?)",
+            (
+                "1",
+                '{"itemid":"1","hostid":"101","name":"CPU Load","key_":"system.cpu.load","value_type":"0","units":"%","lastvalue":"0.75","lastclock":"1700000000","prevvalue":"0.70"}',
+                "aaa",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO items (source_id, raw_json, raw_hash) VALUES (?, ?, ?)",
+            (
+                "2",
+                '{"itemid":"2","hostid":"101","name":"Memory Usage","key_":"vm.memory.used","value_type":"0","units":"GB","lastvalue":"16.5","lastclock":"1700000000","prevvalue":"16.2"}',
+                "bbb",
+            ),
+        )
+        # Item for ws30 — should not be found (no zbx record in cluster CSV)
+        conn.execute(
+            "INSERT INTO items (source_id, raw_json, raw_hash) VALUES (?, ?, ?)",
+            (
+                "3",
+                '{"itemid":"3","hostid":"102","name":"Disk Free","key_":"vfs.fs.size","value_type":"3","units":"B","lastvalue":"","lastclock":"1700000000","prevvalue":""}',
+                "ccc",
+            ),
+        )
+        # Item with non-numeric value (text_value path)
+        conn.execute(
+            "INSERT INTO items (source_id, raw_json, raw_hash) VALUES (?, ?, ?)",
+            (
+                "4",
+                '{"itemid":"4","hostid":"101","name":"Status","key_":"system.status","value_type":"1","units":"","lastvalue":"OK","lastclock":"1700000000","prevvalue":""}',
+                "ddd",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        import zentinull.cli.pipeline as pipeline_mod
+
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+
+        # CSV with source_id so the primary hostid→source_id lookup works
+        header_with_id = (
+            "cluster_id,source,source_id,name,name_clean,serial_number,"
+            "mac_address,mac_clean,asset_tag,manufacturer,model,os,"
+            "os_version,assigned_user,ip_address,imei,extra_attributes"
+        )
+        self._create_clusters_csv(
+            tmp_path,
+            [
+                header_with_id,
+                "1,FG,fg1,ws28,ws28,SER001,aa:bb:cc:dd:ee:ff,aabbccddeeff,,Dell,Latitude,Windows,,jdoe,10.0.0.1,,",
+                "2,ZBX,101,srv-core,srv-core,SER002,,,,HP,ProLiant,Linux,,root,10.0.0.2,,",
+            ],
+        )
+
+        from zentinull.cli.pipeline import run_load
+
+        device_count = run_load()
+        assert device_count == 2
+
+        mesh_path = tmp_path / "data" / "mesh.duckdb"
+        assert mesh_path.exists()
+
+        import duckdb
+
+        d_conn = duckdb.connect(str(mesh_path), read_only=True)
+        try:
+            # Verify metrics table has Zabbix items loaded
+            metric_rows = d_conn.execute(
+                "SELECT metric_name, value, text_value, tags, source, cluster_id FROM metrics ORDER BY metric_name"
+            ).fetchall()
+            assert len(metric_rows) == 3, f"Expected 3 metrics, got {len(metric_rows)}"
+
+            # CPU Load — numeric value, has tags
+            cpu = metric_rows[0]
+            assert cpu[0] == "CPU Load"
+            assert cpu[1] == 0.75  # value
+            assert cpu[2] == ""  # text_value
+            assert isinstance(cpu[3], list)
+            tags_str = " ".join(str(t) for t in cpu[3])
+            assert "key=system.cpu.load" in tags_str
+            assert "value_type=0" in tags_str
+            assert "units=%" in tags_str
+            assert cpu[4] == "zbx"  # source
+            assert cpu[5] == "2"  # cluster_id
+
+            # Memory Usage — numeric value
+            mem = metric_rows[1]
+            assert mem[0] == "Memory Usage"
+            assert mem[1] == 16.5
+            assert mem[2] == ""
+
+            # Status — text_value path (non-numeric lastvalue)
+            status = metric_rows[2]
+            assert status[0] == "Status"
+            assert status[1] is None
+            assert status[2] == "OK"
+
+            # Item for ws30 (hostid=102) should NOT be loaded — no zbx source record in CSV
+            names = [r[0] for r in metric_rows]
+            assert "Disk Free" not in names
+
+            # Verify recorded_at was correctly parsed
+            ts_rows = d_conn.execute("SELECT recorded_at FROM metrics WHERE metric_name = 'CPU Load'").fetchall()
+            assert len(ts_rows) == 1
+            assert ts_rows[0][0] is not None
+        finally:
+            d_conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -576,18 +747,20 @@ class TestExportSource:
 
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "DATA_DIR", tmp_path / "data")
-        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
         conn = sqlite3.connect(str(data_dir / "fg.sqlite"))
         conn.execute(
-            "CREATE TABLE clients (id INTEGER PRIMARY KEY, mac TEXT, ip TEXT, hostname TEXT, manufacturer TEXT, model TEXT, os TEXT)"
+            "CREATE TABLE clients (id INTEGER PRIMARY KEY, source_id TEXT, raw_json TEXT, raw_hash TEXT, remote_updated_at TEXT, fetched_at TEXT)"
         )
         conn.execute(
-            "INSERT INTO clients VALUES (1, 'aa:bb:cc:dd:ee:ff', '10.0.0.1', 'ws28', 'Dell', 'Latitude', 'Windows')"
+            "INSERT INTO clients (id, source_id, raw_json, raw_hash) VALUES (1, 'aa:bb:cc:dd:ee:ff', ?, 'hash1')",
+            (
+                '{"mac": "aa:bb:cc:dd:ee:ff", "hostname": "ws28", "ipv4_address": "10.0.0.1", "manufacturer": "Dell", "hardware_family": "Latitude", "os_name": "Windows"}',
+            ),
         )
         conn.commit()
         conn.close()
@@ -615,11 +788,6 @@ class TestExportSource:
 
         with pytest.raises(ValueError, match="Unknown source key"):
             export_source("nonexistent")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# run_incremental_load
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestRunIncrementalLoad:
@@ -676,8 +844,7 @@ class TestRunIncrementalLoad:
         """New records from CSV are inserted into source_records."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
-        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         self._create_mesh(tmp_path, [])
         self._create_source_csv(
@@ -709,8 +876,7 @@ class TestRunIncrementalLoad:
         """Existing records (same source + source_id) are updated, not duplicated."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
-        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         self._create_mesh(
             tmp_path,
@@ -744,8 +910,7 @@ class TestRunIncrementalLoad:
         """When mesh.duckdb doesn't exist, returns 0 without error."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", tmp_path / "data" / "mesh.duckdb")
-        monkeypatch.setattr(pipeline_mod, "CSV_DIR", tmp_path / "export" / "csv")
+        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
 
         from zentinull.cli.pipeline import run_incremental_load
 
@@ -761,16 +926,23 @@ class TestRunIncrementalLoad:
 class TestRunIncrementalSync:
     """run_incremental_sync() orchestrates ingest → export → upsert for specific sources."""
 
-    def test_calls_ingest_and_export(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
+    def test_calls_ingest_and_export(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any
+    ) -> None:
         """Runs ingest for specified sources, exports each, then upserts."""
         import zentinull.cli.pipeline as pipeline_mod
 
         calls: list[str] = []
+
+        # Mock runner.run_system (lazy import inside run_incremental_sync)
+        import zentinull.ingest.runner as runner_mod
+
         monkeypatch.setattr(
-            pipeline_mod,
-            "run_ingest",
-            lambda sources=None: calls.append(f"ingest:{sources}") or {},
+            runner_mod,
+            "run_system",
+            lambda system_key, manifest=None, **kw: calls.append(f"ingest:{system_key}") or {},
         )
+
         monkeypatch.setattr(
             pipeline_mod,
             "export_source",
@@ -781,16 +953,79 @@ class TestRunIncrementalSync:
             "run_incremental_load",
             lambda s: calls.append(f"load:{s}") or 0,
         )
-        fake_mesh = Path("/tmp/fake/mesh.duckdb")
-        fake_mesh.parent.mkdir(parents=True, exist_ok=True)
-        fake_mesh.touch()
-        monkeypatch.setattr(pipeline_mod, "MESH_DB", fake_mesh)
+
+        # Provide minimal manifest globals so export loop functions
+        monkeypatch.setattr(pipeline_mod, "_SOURCE_TO_TABLES", {"fg": ["fg_clients"], "zbx": ["zbx_hosts"]})
+        monkeypatch.setattr(pipeline_mod, "_get_manifest", lambda: None)  # type: ignore[method-assign]
+
+        paths = _make_paths(tmp_path)
+        paths.mesh_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.mesh_path.touch()
+        monkeypatch.setattr(pipeline_mod, "PATHS", paths)
 
         from zentinull.cli.pipeline import run_incremental_sync
 
         run_incremental_sync(["fg", "zbx"])
 
-        assert "ingest:['fg', 'zbx']" in calls
+        assert "ingest:fg" in calls
+        assert "ingest:zbx" in calls
         assert "export:fg" in calls
         assert "export:zbx" in calls
         assert "load:['fg', 'zbx']" in calls
+
+    def test_double_run_upserts_zero_when_unchanged(self, monkeypatch: pytest.MonkeyPatch, temp_data_dir: Path) -> None:
+        """Second incremental run writes 0 when raw_hash unchanged (Phase 3 acceptance)."""
+        from zentinull.ingest import runner
+        from zentinull.ingest.strategies import REGISTRY
+        from zentinull.manifest.types import Auth, Feed, Manifest, Role, System
+
+        # Build minimal manifest with a test strategy
+        manifest = Manifest(
+            project="test",
+            systems={"zbx": System(auth=Auth("none"), strategy="test_fixed", label="Zabbix")},
+            feeds={
+                "zbx_hosts": Feed(
+                    system="zbx",
+                    endpoint={"url": "http://fake/api"},
+                    role=Role.ANCHOR,
+                    store="hosts",
+                    id_path="hostid",
+                ),
+            },
+            profiles={},
+        )
+
+        fixed_items = [{"hostid": "101", "hostname": "srv-core"}]
+
+        def test_fixed_fetch(endpoint: object, auth: object) -> list[dict]:
+            return fixed_items
+
+        monkeypatch.setitem(REGISTRY, "test_fixed", test_fixed_fetch)
+
+        # Point all PATHS references to temp
+        import zentinull.config as config_mod
+        import zentinull.ingestors.base as base_mod
+
+        paths = _paths_from_data_dir(temp_data_dir)
+        monkeypatch.setattr(config_mod, "PATHS", paths)
+        monkeypatch.setattr(base_mod, "PATHS", paths)
+
+        # First run — inserts rows
+        first_results = runner.run_system("zbx", manifest, incremental=True)
+        assert "zbx_hosts" in first_results
+        assert first_results["zbx_hosts"] > 0, f"First run wrote 0: {first_results}"
+
+        # Verify the raw-store table exists and has data
+        import sqlite3
+
+        zbx_db = temp_data_dir / "zbx.sqlite"
+        assert zbx_db.exists()
+        conn = sqlite3.connect(str(zbx_db))
+        row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
+        assert row is not None and row[0] > 0
+        conn.close()
+
+        # Second run — same data, raw_hash unchanged → upsert skips all
+        second_results = runner.run_system("zbx", manifest, incremental=True)
+        assert "zbx_hosts" in second_results
+        assert second_results["zbx_hosts"] == 0, f"Second run wrote {second_results['zbx_hosts']}, expected 0"

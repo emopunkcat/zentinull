@@ -29,33 +29,22 @@ from typing import Any
 
 from .config import _load_dotenv
 from .logging_config import get_logger, setup
+from .manifest import load_manifest
 
 _load_dotenv()
 setup(level="INFO")
 
 log = get_logger("worker")
 
-# Default intervals in seconds
-DEFAULTS: dict[str, int] = {
-    "zbx": 600,  # 10 min — metrics change constantly
-    "fg": 1800,  # 30 min — network state shifts
-    "me": 7200,  # 2h — endpoint status changes slowly
-    "sdp": 7200,  # 2h — tickets flow steadily
-    "ad": 21600,  # 6h — user assignments change daily
-    "sp": 43200,  # 12h — inventory is manual/weekly
-}
+# Default intervals in seconds — derived from manifest System.schedule
+_manifest = load_manifest()
+DEFAULTS: dict[str, int] = {key: system.schedule or 3600 for key, system in _manifest.systems.items()}
 
 # Splink schedule (separate from source schedules)
 SPLINK_DEFAULT = 86400  # 24h
 
-SOURCE_GROUPS: dict[str, list[str]] = {
-    "zbx": ["zbx"],
-    "fg": ["fg"],
-    "me": ["me"],
-    "sdp": ["sdp"],
-    "ad": ["ad"],
-    "sp": ["sp"],
-}
+# Source groups — each system is its own group
+_SOURCE_GROUPS: dict[str, list[str]] = {key: [key] for key in _manifest.systems}
 
 
 def _get_interval(source: str) -> int:
@@ -126,7 +115,7 @@ async def loop() -> None:
     )
 
     while not state.should_stop:
-        for source, sources in SOURCE_GROUPS.items():
+        for source, sources in _SOURCE_GROUPS.items():
             if state.should_run(source) and not state.running:
                 state.running = True
                 try:

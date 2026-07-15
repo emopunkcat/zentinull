@@ -285,36 +285,40 @@ class MeshDB:
     # ── Search ───────────────────────────────────────────────────────────
 
     def search(self, q: str, field: str = "", limit: int = 20) -> list[ClusterInfo]:
-        """Search devices by any field or full-text."""
+        """Search devices by any field or full-text.
+
+        ``field`` is interpolated into SQL, so it MUST be validated against the
+        whitelist below — an unknown value falls back to full-text search rather
+        than reaching the query as raw text.
+        """
         ql = f"%{q.lower()}%"
+        searchable = {
+            "device_name",
+            "serial_number",
+            "mac_clean",
+            "ip_address",
+            "assigned_user",
+            "manufacturer",
+            "model",
+            "os",
+            "os_version",
+            "asset_tag",
+            "imei",
+        }
+        if field == "name":
+            field = "device_name"
+        if field and field not in searchable:
+            field = ""
         conn = self._conn()
         try:
-            if field:
-                valid = {
-                    "name_clean",
-                    "serial_number",
-                    "mac_clean",
-                    "ip_address",
-                    "assigned_user",
-                    "manufacturer",
-                    "model",
-                    "os",
-                    "os_version",
-                    "asset_tag",
-                    "imei",
-                    "source",
-                    "source_id",
-                }
-                if field not in valid:
-                    field = "device_name" if field == "name" else field
-                if field == "mac_clean":
-                    mac = _norm_mac(q)
-                    rows = conn.execute("SELECT * FROM devices WHERE mac_address = ? LIMIT ?", [mac, limit]).fetchall()
-                else:
-                    rows = conn.execute(
-                        f"SELECT * FROM devices WHERE lower({field}) LIKE ? ORDER BY source_count DESC LIMIT ?",
-                        [ql, limit],
-                    ).fetchall()
+            if field == "mac_clean":
+                mac = _norm_mac(q)
+                rows = conn.execute("SELECT * FROM devices WHERE mac_address = ? LIMIT ?", [mac, limit]).fetchall()
+            elif field:
+                rows = conn.execute(
+                    f"SELECT * FROM devices WHERE lower({field}) LIKE ? ORDER BY source_count DESC LIMIT ?",
+                    [ql, limit],
+                ).fetchall()
             else:
                 rows = conn.execute(
                     """
@@ -388,6 +392,20 @@ class MeshDB:
             ).fetchall()
             cols = [d[0] for d in conn.description]
             top = [self._row_to_cluster_info(dict(zip(cols, r, strict=True))) for r in top_rows]
+            # Source count distribution
+            sc_dist = dict(
+                conn.execute("""
+                    SELECT source_count::VARCHAR, COUNT(*) AS n
+                    FROM devices GROUP BY source_count ORDER BY source_count
+                """).fetchall()
+            )
+            # Source combo breakdown
+            combos = dict(
+                conn.execute("""
+                    SELECT list_sort(sources)::VARCHAR AS combo, COUNT(*) AS n
+                    FROM devices GROUP BY combo ORDER BY n DESC LIMIT 20
+                """).fetchall()
+            )
 
             return {
                 "clusters": total_devices,
@@ -397,6 +415,8 @@ class MeshDB:
                 "sources": source_counts,
                 "coverage": coverage,
                 "top_clusters": [t.model_dump() for t in top],
+                "source_count_dist": sc_dist,
+                "source_combos": combos,
             }
         except Exception:
             log.error({"event": "dashboard_error"})
@@ -502,17 +522,19 @@ class MeshDB:
         """Paginated cluster list."""
         conn = self._conn()
         try:
-            where = [f"source_count >= {min_sources}"]
+            where = ["source_count >= ?"]
+            params: list[object] = [min_sources]
             if source:
-                where.append(f"list_contains(sources, '{source}')")
+                where.append("list_contains(sources, ?)")
+                params.append(source)
             clause = " AND ".join(where)
 
-            row = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {clause}").fetchone()
+            row = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {clause}", params).fetchone()
             assert row is not None
             total: int = row[0]
             rows = conn.execute(
-                f"SELECT * FROM devices WHERE {clause} "
-                f"ORDER BY source_count DESC, device_name LIMIT {limit} OFFSET {offset}"
+                f"SELECT * FROM devices WHERE {clause} ORDER BY source_count DESC, device_name LIMIT ? OFFSET ?",
+                [*params, limit, offset],
             ).fetchall()
             cols = [d[0] for d in conn.description]
             return total, [self._row_to_cluster_info(dict(zip(cols, r, strict=True))) for r in rows]
@@ -612,6 +634,20 @@ class MeshDB:
                 LIMIT ?
             """,
                 [cluster_id, limit],
+            ).fetchall()
+            cols = [d[0] for d in conn.description]
+            return [dict(zip(cols, r, strict=True)) for r in rows]
+        finally:
+            conn.close()
+
+    def device_attachments(self, cluster_id: str) -> list[dict[str, Any]]:
+        """Get all attachment records linked to a cluster."""
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT feed_key, source_id, field, value, confidence, payload, linked_at "
+                "FROM attachments WHERE cluster_id = ? ORDER BY linked_at DESC",
+                [cluster_id],
             ).fetchall()
             cols = [d[0] for d in conn.description]
             return [dict(zip(cols, r, strict=True)) for r in rows]

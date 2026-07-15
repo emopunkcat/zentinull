@@ -22,7 +22,7 @@ class TestCreateMeshTables:
         create_mesh_tables(conn, str(csv_path))
 
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        assert tables == {"source_records", "devices", "metrics", "events"}
+        assert tables == {"source_records", "devices", "metrics", "events", "attachments"}
         conn.close()
 
     def test_source_records_populated(self, tmp_path: Path) -> None:
@@ -144,6 +144,54 @@ class TestCreateMeshTables:
         assert dev_count == 0
         conn.close()
 
+    def test_all_numeric_columns_stay_varchar(self, tmp_path: Path) -> None:
+        """All-numeric serial/imei/cluster_id columns load as VARCHAR, not BIGINT.
+
+        Given a CSV where every value in serial_number, imei, and cluster_id is
+        numeric (read_csv_auto would infer BIGINT), when create_mesh_tables loads
+        it, then the columns are VARCHAR, DEVICES_SQL's `!= ''` comparisons
+        succeed, and values round-trip as strings.
+        """
+        from zentinull.api.schema import create_mesh_tables
+
+        csv_path = _write_csv(
+            tmp_path / "devices.csv",
+            [
+                SPLINK_HEADERS,
+                [
+                    "1",
+                    "sp",
+                    "42",
+                    "SRV",
+                    "srv",
+                    "12345678",
+                    "",
+                    "001122334455",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "490154203237518",
+                    "",
+                ],
+                ["2", "fg", "43", "", "", "87654321", "", "", "", "", "", "", "", "", "", "", ""],
+            ],
+        )
+        conn = duckdb.connect()
+        create_mesh_tables(conn, str(csv_path))
+
+        types = dict((row[0], row[1]) for row in conn.execute("DESCRIBE source_records").fetchall())
+        assert types["cluster_id"] == "VARCHAR"
+        assert types["serial_number"] == "VARCHAR"
+        assert types["imei"] == "VARCHAR"
+
+        rows = conn.execute("SELECT cluster_id, serial_number FROM devices ORDER BY cluster_id").fetchall()
+        assert rows == [("1", "12345678"), ("2", "87654321")]
+        conn.close()
+
 
 class TestSqlConstants:
     """SQL string constants are valid and syntactically correct."""
@@ -201,7 +249,7 @@ class TestSqlConstants:
 
     def test_indexes_sql_creates_indexes(self) -> None:
         """INDEXES_SQL creates indexes after tables exist."""
-        from zentinull.api.schema import DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
+        from zentinull.api.schema import ATTACHMENTS_SQL, DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
 
         conn = duckdb.connect()
         conn.execute(
@@ -215,6 +263,7 @@ class TestSqlConstants:
         conn.execute(DEVICES_SQL)
         conn.execute(METRICS_SQL)
         conn.execute(EVENTS_SQL)
+        conn.execute(ATTACHMENTS_SQL)
         conn.execute(INDEXES_SQL)
         indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
         assert "idx_devices_name" in indexes

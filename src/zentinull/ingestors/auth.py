@@ -75,6 +75,10 @@ class OAuth2RefreshAuth:
                 self._expires_at = data["expires_at"]
             elif "expires_in" in data:
                 self._expires_at = time.time() + data["expires_in"] - 60
+            elif data.get("access_token"):
+                # No expiry info — assume token is recently provisioned and valid
+                # for a default 55-minute window to avoid immediate refresh.
+                self._expires_at = time.time() + 3300
         except Exception as e:
             log.warning({"event": "oauth_load_failed", "token_file": str(self._token_file), "error": str(e)})
 
@@ -112,6 +116,12 @@ class OAuth2RefreshAuth:
             r = requests.post(self._token_url, data=data, timeout=(15, 30))
             r.raise_for_status()
             body = r.json()
+            # Zoho returns HTTP 200 with {"error":"invalid_grant"} for expired/revoked tokens
+            err = body.get("error")
+            if err:
+                error_description = body.get("error_description", err)
+                log.error({"event": "oauth_refresh_failed", "token_url": self._token_url, "error": error_description})
+                return False
             self._access_token = body["access_token"]
             self._expires_at = time.time() + body.get("expires_in", 3600) - 60
             # Capture token_type from server response (e.g. Zoho-oauthtoken)

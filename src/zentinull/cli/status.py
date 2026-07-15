@@ -8,13 +8,28 @@ for cross-process safety.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from ..config import STATUS_FILE
+from ..config import PATHS
+
+if sys.platform != "win32":
+    import fcntl  # POSIX advisory file locking (absent on Windows)
+
+# Windows opens fds in text mode by default (newline translation on write); the
+# following ftruncate(len(bytes)) then chops the JSON tail and corrupts it.
+# O_BINARY forces byte-exact I/O. Absent (and unneeded) on POSIX, so default 0.
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
+
+def _flock(fd: int, *, exclusive: bool) -> None:
+    """Advisory lock on a fd; no-op on Windows (no fcntl)."""
+    if sys.platform != "win32":
+        fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -22,11 +37,11 @@ from ..config import STATUS_FILE
 def _read() -> dict[str, Any]:
     """Read the status file with shared lock, returning default empty structure on error."""
     try:
-        fd = os.open(str(STATUS_FILE), os.O_RDONLY)
+        fd = os.open(str(PATHS.status_file), os.O_RDONLY | _O_BINARY)
     except FileNotFoundError:
         return {"stages": {}, "freshness": {}}
     try:
-        fcntl.flock(fd, fcntl.LOCK_SH)
+        _flock(fd, exclusive=False)
         return cast(dict[str, Any], json.loads(os.read(fd, 1_000_000).decode()))
     except (json.JSONDecodeError, OSError):
         return {"stages": {}, "freshness": {}}
@@ -37,10 +52,10 @@ def _read() -> dict[str, Any]:
 @contextlib.contextmanager
 def _lock_and_update() -> Any:
     """Acquire exclusive lock on the status file, read, yield for update, and write back."""
-    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(STATUS_FILE), os.O_CREAT | os.O_RDWR)
+    PATHS.status_file.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(PATHS.status_file), os.O_CREAT | os.O_RDWR | _O_BINARY)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _flock(fd, exclusive=True)
         os.lseek(fd, 0, os.SEEK_SET)
         try:
             content = os.read(fd, 1_000_000).decode("utf-8").strip()
@@ -132,6 +147,23 @@ def record_freshness(source: str, newest_record: str, row_count: int) -> None:
             "newest_record": newest_record,
             "row_count": row_count,
         }
+
+
+def record_coverage_baseline(baseline: dict[str, dict[str, int]]) -> None:
+    """Record per-source, per-field fill-rate baseline for drift detection.
+
+    Args:
+        baseline: Dict mapping source → {field → fill_percentage}.
+    """
+    with _lock_and_update() as data:
+        data["coverage_baseline"] = baseline
+
+
+def get_coverage_baseline() -> dict[str, dict[str, int]]:
+    """Return the coverage baseline from disk."""
+    data = _read()
+    baseline = data.get("coverage_baseline", {})
+    return cast(dict[str, dict[str, int]], baseline)
 
 
 def get_status() -> dict[str, Any]:

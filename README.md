@@ -44,7 +44,7 @@ python scripts/run_ingest.py
 python scripts/pipeline.py
 
 # API server
-python -m zentinull.api.server
+python serve.py start
 # → http://localhost:8001/docs
 ```
 

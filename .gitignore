@@ -24,6 +24,9 @@ data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 data/*.duckdb
+data/*.duckdb.tmp
+data/*.duckdb.tmp.wal
+data/*.lock
 export/csv/
 export/splink_output/
 data/*.log
@@ -41,4 +44,4 @@ data/status.json
 .DS_Store
 Thumbs.db
 .coverage
-data/*-oauth.json
+data/*oauth.json

@@ -1,0 +1,1 @@
+{"predict_threshold": -10.0, "cluster_threshold": -5, "sweep_thresholds": [10, 5, 0, -2, -5, -10], "u_max_pairs": 2000000, "lambda_recall": 0.5}

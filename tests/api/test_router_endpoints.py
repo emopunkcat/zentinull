@@ -202,9 +202,11 @@ class TestListClusters:
 
     def test_default_pagination(self, client_with_db: TestClient, mock_meshdb: MagicMock) -> None:
         """Default params return first page."""
+        from zentinull.api.models import ClusterInfo
+
         mock_meshdb.list_clusters.return_value = (
             1,
-            [MagicMock(model_dump=lambda: {"cluster_id": "c1", "device_name": "ws28", "source_count": 1})],
+            [ClusterInfo(cluster_id="c1", device_name="ws28", source_count=1)],
         )
         resp = client_with_db.get("/clusters")
         assert resp.status_code == 200
@@ -362,7 +364,9 @@ class TestDeviceStats:
         story_mock.cluster_id = "c1"
         mock_meshdb.lookup.return_value = story_mock
         mock_meshdb.device_stats.return_value = {
-            "latest_metrics": [{"metric_name": "cpu_pct", "value": 42.0}],
+            "metrics": {
+                "cpu_pct": {"value": 42.0, "text": None, "source": "zbx", "recorded_at": "2026-07-13T12:00:00"}
+            },
             "event_counts": {"warning": 3, "critical": 1},
         }
         mock_meshdb.device_metric_summary.return_value = {

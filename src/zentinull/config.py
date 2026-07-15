@@ -8,9 +8,8 @@ Usage:
     from .config import DATA_DIR             # relative (from sibling module)
 """
 
-from __future__ import annotations
-
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -20,6 +19,50 @@ log = get_logger("config")
 
 # ── Project root ──────────────────────────────────────────────────────────────
 ROOT: Final[Path] = Path(__file__).resolve().parent.parent.parent
+
+
+@dataclass(frozen=True)
+class ProjectPaths:
+    """Project-scoped path constants."""
+
+    project: str
+    data_dir: Path
+    export_dir: Path
+    mesh_path: Path
+    status_file: Path
+    log_file: Path
+    csv_dir: Path
+    splink_output_dir: Path
+    benchmarks_dir: Path
+
+
+def resolve_paths(project: str | None = None) -> ProjectPaths:
+    """Resolve project-scoped paths.
+
+    For project='default' (or ZENTINULL_PROJECT unset): paths are
+    byte-identical to the current constants (ROOT/data, ROOT/export, etc.).
+    For any other project: paths are ROOT/projects/<p>/state/data,
+    ROOT/projects/<p>/state/export, etc.
+    """
+    project_name = project or os.environ.get("ZENTINULL_PROJECT", "default")
+    if project_name == "default":
+        data_dir = ROOT / "data"
+        export_dir = ROOT / "export"
+    else:
+        base = ROOT / "projects" / project_name / "state"
+        data_dir = base / "data"
+        export_dir = base / "export"
+    return ProjectPaths(
+        project=project_name,
+        data_dir=data_dir,
+        export_dir=export_dir,
+        mesh_path=data_dir / "mesh.duckdb",
+        status_file=data_dir / "status.json",
+        log_file=data_dir / "pipeline.log",
+        csv_dir=export_dir / "csv",
+        splink_output_dir=export_dir / "splink_output",
+        benchmarks_dir=ROOT / ".benchmarks",
+    )
 
 
 def _load_dotenv() -> None:
@@ -35,19 +78,20 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+PATHS: ProjectPaths = resolve_paths()
 
-# ── Data directories ──────────────────────────────────────────────────────────
+# ── Data directories (aliases of PATHS for backward compatibility) ───────────
 
-DATA_DIR: Final[Path] = ROOT / "data"
-EXPORT_DIR: Final[Path] = ROOT / "export"
-CSV_DIR: Final[Path] = EXPORT_DIR / "csv"
-SPLINK_OUTPUT_DIR: Final[Path] = EXPORT_DIR / "splink_output"
-BENCHMARKS_DIR: Final[Path] = ROOT / ".benchmarks"
+DATA_DIR: Final[Path] = PATHS.data_dir
+EXPORT_DIR: Final[Path] = PATHS.export_dir
+CSV_DIR: Final[Path] = PATHS.csv_dir
+SPLINK_OUTPUT_DIR: Final[Path] = PATHS.splink_output_dir
+BENCHMARKS_DIR: Final[Path] = PATHS.benchmarks_dir
 
 # ── Database paths ────────────────────────────────────────────────────────────
-MESH_DB: Final[Path] = DATA_DIR / "mesh.duckdb"
-STATUS_FILE: Final[Path] = DATA_DIR / "status.json"
-PIPELINE_LOG: Final[Path] = DATA_DIR / "pipeline.log"
+MESH_DB: Final[Path] = PATHS.mesh_path
+STATUS_FILE: Final[Path] = PATHS.status_file
+PIPELINE_LOG: Final[Path] = PATHS.log_file
 
 # ── Server configuration ──────────────────────────────────────────────────────
 API_HOST: str = os.environ.get("ZENTINULL_HOST", "0.0.0.0")
@@ -75,6 +119,7 @@ AD_SEARCH_BASE: str = os.environ.get("AD_SEARCH_BASE", "DC=example,DC=local")
 FG_HOST: str = os.environ.get("FG_HOST", "")
 FG_PORT: int = int(os.environ.get("FG_PORT", "8443"))
 FG_API_KEY: str = os.environ.get("FG_API_KEY", "")
+FG_BASE_URL: str = f"https://{FG_HOST}:{FG_PORT}"
 
 # ── Ingestor auth: ManageEngine ───────────────────────────────────────────────
 ME_CLOUD_BASE_URL: str = os.environ.get("ME_CLOUD_BASE_URL", "https://endpointcentral.manageengine.com/api/1.4")
@@ -99,6 +144,13 @@ ZBX_TOKEN: str = os.environ.get("ZBX_TOKEN", "")
 
 # ── Splink configuration ──────────────────────────────────────────────────────
 SPLINK_THRESHOLD: int = int(os.environ.get("SPLINK_THRESHOLD", "-5"))
+SPLINK_PREDICT_THRESHOLD: float = float(os.environ.get("SPLINK_PREDICT_THRESHOLD", "-10"))
+SPLINK_U_MAX_PAIRS: int = int(os.environ.get("SPLINK_U_MAX_PAIRS", "2000000"))
+SPLINK_LAMBDA_RECALL: float = float(os.environ.get("SPLINK_LAMBDA_RECALL", "0.5"))
+# Comma-separated list of match-weight thresholds to sweep during clustering
+SPLINK_SWEEP_THRESHOLDS: list[int] = [
+    int(x.strip()) for x in os.environ.get("SPLINK_SWEEP_THRESHOLDS", "10,5,0,-2,-5,-10").split(",")
+]
 
 
 def validate_config() -> list[str]:

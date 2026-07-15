@@ -8,6 +8,27 @@ from pathlib import Path
 
 import pytest
 
+from zentinull.config import ProjectPaths
+
+
+def _make_paths(tmp_path: Path) -> ProjectPaths:
+    """Create a ProjectPaths instance pointing at tmp_path subdirectories."""
+    data_dir = tmp_path / "data"
+    export_dir = tmp_path / "export"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return ProjectPaths(
+        project="test",
+        data_dir=data_dir,
+        export_dir=export_dir,
+        mesh_path=data_dir / "mesh.duckdb",
+        status_file=data_dir / "status.json",
+        log_file=data_dir / "pipeline.log",
+        csv_dir=export_dir / "csv",
+        splink_output_dir=export_dir / "splink_output",
+        benchmarks_dir=tmp_path / ".benchmarks",
+    )
+
 
 @pytest.fixture
 def temp_data_dir(tmp_path: Path) -> Path:
@@ -32,16 +53,15 @@ def temp_status_file(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def isolated_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Monkeypatch status.py module-level path to isolate fixture from real data/.
+    """Monkeypatch status.py module-level PATHS to isolate fixture from real data/.
 
-    Patches zentinull.cli.status.STATUS_FILE so status reads/writes
+    Patches zentinull.cli.status.PATHS so status reads/writes
     target tmp_path instead of the project root.
     """
     import zentinull.cli.status as status_mod
 
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(status_mod, "STATUS_FILE", data_dir / "status.json")
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(status_mod, "PATHS", paths)
 
 
 @pytest.fixture

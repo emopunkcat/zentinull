@@ -19,11 +19,15 @@ import os
 import random
 import sys
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-MESH_DB = ROOT / "data" / "mesh.duckdb"
+from zentinull.config import PATHS
+from zentinull.manifest import load_manifest
+
+MESH_DB = PATHS.mesh_path
+
+# Load manifest to get system keys
+_manifest = load_manifest()
+_SYSTEM_KEYS = sorted(_manifest.systems.keys())
 
 # ── Synthetic data generators ─────────────────────────────────────────────────
 
@@ -158,28 +162,7 @@ def _build_device_templates(count: int) -> list[dict]:
     return templates
 
 
-# ── Source weighting ──────────────────────────────────────────────────────────
-# Each source has a coverage probability — how likely it is to report a given
-# device.  Overlapping sources are the signal Splink uses for entity resolution.
-
-SOURCE_WEIGHTS = {
-    "sp": 0.55,  # SharePoint — good coverage
-    "me": 0.50,  # ManageEngine — moderate
-    "fg": 0.40,  # FortiGate — network visibility
-    "zbx": 0.45,  # Zabbix — monitoring
-    "ad": 0.60,  # Active Directory — best coverage (domain-joined)
-    "sdp": 0.30,  # ServiceDesk Plus — ticket system (spottier)
-}
-
-# Field reliability per source — fields that appear when present
-SOURCE_FIELDS: dict[str, list[str]] = {
-    "sp": ["name", "mfr", "model", "serial", "os", "user", "ip"],
-    "me": ["name", "mfr", "model", "serial", "os", "user"],
-    "fg": ["name", "os", "ip", "mac"],
-    "zbx": ["name", "ip", "os"],
-    "ad": ["name", "serial", "os", "user", "ip", "mac"],
-    "sdp": ["name", "mfr", "model", "serial", "os", "user", "mac", "imei"],
-}
+# Coverage and field reliability now come from the manifest (System.coverage, System.fields)
 
 
 def _overlap_count() -> int:
@@ -231,13 +214,13 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
         cluster_id = f"c{idx + 1}"
         n_sources = _overlap_count()
         chosen_sources = random.sample(
-            sorted(SOURCE_WEIGHTS.keys()),
+            _SYSTEM_KEYS,
             n_sources,
         )
 
         # Each source gets a slightly different view of the same device
         for src in chosen_sources:
-            fields = SOURCE_FIELDS.get(src, ["name"])
+            fields = list(_manifest.systems[src].fields)
             src_id = f"{src[:2]}_{random.randint(1000, 9999)}"
 
             # Apply per-source field reliability (not every source sees every field)
@@ -293,7 +276,7 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
     metric_names = ["cpu_pct", "memory_pct", "disk_pct", "network_in_bps", "network_out_bps"]
     for idx, _ in enumerate(templates):
         cid = f"c{idx + 1}"
-        for src in sorted(SOURCE_WEIGHTS.keys()):
+        for src in _SYSTEM_KEYS:
             for mn in metric_names:
                 if random.random() < 0.6:  # not every source reports every metric
                     continue
@@ -353,7 +336,7 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
             detail = random.choice(event_templates).format(
                 pct=random.randint(75, 99),
                 name=dev["name"],
-                src=random.choice(list(SOURCE_WEIGHTS.keys())),
+                src=random.choice(_SYSTEM_KEYS),
                 days=random.randint(1, 90),
                 iface=f"eth{random.randint(0, 4)}",
                 ip=dev["ip"],
@@ -361,7 +344,7 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
             conn.execute(
                 "INSERT INTO events (cluster_id, source, event_type, detail, severity, recorded_at, ingested_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (cid, random.choice(list(SOURCE_WEIGHTS.keys())), etype, detail, sev, recorded_at, now),
+                (cid, random.choice(_SYSTEM_KEYS), etype, detail, sev, recorded_at, now),
             )
 
     # ── indexes ─────────────────────────────────────────────────────────

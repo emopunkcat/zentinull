@@ -13,10 +13,22 @@ from ..logging_config import get_logger
 from .db import MeshDB
 from .models import (
     AnomaliesReport,
+    AttachmentRecord,
     ClusterInfo,
+    ClusterListResponse,
     DashboardStats,
+    DeviceAttachmentsResponse,
+    DeviceMetricsResponse,
+    DeviceMetricSummaryResponse,
+    DeviceStatsBlock,
+    DeviceStatsResponse,
     DeviceStory,
+    DeviceTimelineResponse,
+    EventRecord,
     MeshStats,
+    MetricAggregate,
+    MetricLatest,
+    MetricRecord,
 )
 
 log = get_logger("api.router")
@@ -157,19 +169,19 @@ async def mesh(request: Request) -> dict[str, Any]:
     return _db(request).mesh_stats()
 
 
-@router.get("/clusters", response_model=dict[str, Any])
+@router.get("/clusters", response_model=ClusterListResponse)
 async def list_clusters(
     request: Request,
     min_sources: int = 1,
     source: str = "",
     limit: int = Query(50, le=200),
     offset: int = 0,
-) -> dict[str, Any]:
+) -> ClusterListResponse:
     """Paginated cluster list, filterable by source count or system."""
     log.info({"event": "request", "endpoint": "/clusters", "min_sources": min_sources, "source": source})
     db = _db(request)
     total, items = db.list_clusters(min_sources, source, limit, offset)
-    return {"total": total, "offset": offset, "items": [i.model_dump() for i in items]}
+    return ClusterListResponse(total=total, offset=offset, items=items)
 
 
 @router.get("/anomalies", response_model=AnomaliesReport)
@@ -184,7 +196,7 @@ async def anomalies(request: Request) -> dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@router.get("/device/{query}/metrics")
+@router.get("/device/{query}/metrics", response_model=DeviceMetricsResponse)
 async def device_metrics(
     query: str,
     request: Request,
@@ -192,7 +204,7 @@ async def device_metrics(
     source: str = "",
     hours: int = 24,
     limit: int = Query(500, le=5000),
-) -> dict[str, Any]:
+) -> DeviceMetricsResponse:
     """
     Time-series metrics for a device.
     /device/ws28/metrics                          → all metrics last 24h
@@ -202,24 +214,24 @@ async def device_metrics(
     log.info({"event": "request", "endpoint": "/device/{query}/metrics", "query": query, "hours": hours})
     db = _db(request)
     cid = _resolve_cluster(db, query)
-    metrics = db.device_metrics(cid, metric=metric, source=source, hours=hours, limit=limit)
+    raw_metrics = db.device_metrics(cid, metric=metric, source=source, hours=hours, limit=limit)
     names = db.device_metric_names(cid)
-    return {
-        "query": query,
-        "cluster_id": cid,
-        "metric_names": names,
-        "count": len(metrics),
-        "metrics": metrics,
-    }
+    return DeviceMetricsResponse(
+        query=query,
+        cluster_id=cid,
+        metric_names=names,
+        count=len(raw_metrics),
+        metrics=[MetricRecord(**m) for m in raw_metrics],
+    )
 
 
-@router.get("/device/{query}/timeline")
+@router.get("/device/{query}/timeline", response_model=DeviceTimelineResponse)
 async def device_timeline(
     query: str,
     request: Request,
     hours: int = 168,
     limit: int = Query(100, le=1000),
-) -> dict[str, Any]:
+) -> DeviceTimelineResponse:
     """
     Recent events for a device.
     /device/ws28/timeline          → last 7 days
@@ -228,18 +240,29 @@ async def device_timeline(
     log.info({"event": "request", "endpoint": "/device/{query}/timeline", "query": query, "hours": hours})
     db = _db(request)
     cid = _resolve_cluster(db, query)
-    events = db.device_timeline(cid, hours=hours, limit=limit)
-    return {
-        "query": query,
-        "cluster_id": cid,
-        "hours": hours,
-        "count": len(events),
-        "events": events,
-    }
+    raw_events = db.device_timeline(cid, hours=hours, limit=limit)
+    return DeviceTimelineResponse(
+        query=query,
+        cluster_id=cid,
+        hours=hours,
+        count=len(raw_events),
+        events=[EventRecord(**e) for e in raw_events],
+    )
 
 
-@router.get("/device/{query}/stats")
-async def device_stats(query: str, request: Request) -> dict[str, Any]:
+@router.get("/device/{query}/attachments", response_model=DeviceAttachmentsResponse)
+async def device_attachments(query: str, request: Request) -> DeviceAttachmentsResponse:
+    """Linked attachment records for a device (tickets, notes, context)."""
+    log.info({"event": "request", "endpoint": "/device/{query}/attachments"})
+    db = _db(request)
+    cluster_id = _resolve_cluster(db, query)
+    raw = db.device_attachments(cluster_id)
+    attachments = [AttachmentRecord(**r) for r in raw]
+    return DeviceAttachmentsResponse(cluster_id=cluster_id, attachments=attachments)
+
+
+@router.get("/device/{query}/stats", response_model=DeviceStatsResponse)
+async def device_stats(query: str, request: Request) -> DeviceStatsResponse:
     """
     Current state: latest metric values + event severity counts.
     /device/ws28/stats
@@ -249,20 +272,23 @@ async def device_stats(query: str, request: Request) -> dict[str, Any]:
     cid = _resolve_cluster(db, query)
     stats = db.device_stats(cid)
     summary = db.device_metric_summary(cid, hours=24)
-    return {
-        "query": query,
-        "cluster_id": cid,
-        "stats": stats,
-        "metric_summary_24h": summary,
-    }
+    return DeviceStatsResponse(
+        query=query,
+        cluster_id=cid,
+        stats=DeviceStatsBlock(
+            metrics={k: MetricLatest(**v) for k, v in stats.get("metrics", {}).items()},
+            event_counts=stats.get("event_counts", {}),
+        ),
+        metric_summary_24h={k: MetricAggregate(**v) for k, v in summary.items()},
+    )
 
 
-@router.get("/device/{query}/metric-summary")
+@router.get("/device/{query}/metric-summary", response_model=DeviceMetricSummaryResponse)
 async def device_metric_summary(
     query: str,
     request: Request,
     hours: int = 24,
-) -> dict[str, Any]:
+) -> DeviceMetricSummaryResponse:
     """
     Aggregated metrics: avg/max/min/latest per metric.
     /device/ws28/metric-summary?hours=168
@@ -270,12 +296,13 @@ async def device_metric_summary(
     log.info({"event": "request", "endpoint": "/device/{query}/metric-summary", "query": query, "hours": hours})
     db = _db(request)
     cid = _resolve_cluster(db, query)
-    return {
-        "query": query,
-        "cluster_id": cid,
-        "hours": hours,
-        "metrics": db.device_metric_summary(cid, hours=hours),
-    }
+    summary = db.device_metric_summary(cid, hours=hours)
+    return DeviceMetricSummaryResponse(
+        query=query,
+        cluster_id=cid,
+        hours=hours,
+        metrics={k: MetricAggregate(**v) for k, v in summary.items()},
+    )
 
 
 def _resolve_cluster(db: MeshDB, query: str) -> str:

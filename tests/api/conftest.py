@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from zentinull.api.db import MeshDB
-from zentinull.api.schema import EVENTS_SQL, INDEXES_SQL, METRICS_SQL
+from zentinull.api.schema import ATTACHMENTS_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
 from zentinull.api.server import app
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -240,6 +240,9 @@ def seeded_meshdb(tmp_path: Path) -> MeshDB:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             row,
         )
+
+    # ── attachments table ────────────────────────────────────────────
+    conn.execute(ATTACHMENTS_SQL)
 
     # ── indexes ────────────────────────────────────────────────────────────
     conn.execute(INDEXES_SQL)

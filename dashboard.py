@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 import streamlit as st
+from zentinull.manifest import load_manifest
 
 _HERE = Path(__file__).resolve().parent
 _API_BASE = os.environ.get("DASHBOARD_API_URL", "http://localhost:8001")
@@ -224,18 +225,13 @@ for i, sname in enumerate(stage_order):
 st.subheader("Data freshness")
 
 if freshness:
+    # Build _src_labels from manifest
+    manifest = load_manifest()
+    _src_labels = {key: system.label for key, system in manifest.systems.items()}
     fcols = st.columns(min(len(freshness), 6))
-    src_labels = {
-        "sp": "SharePoint",
-        "me": "ManageEngine",
-        "fg": "FortiGate",
-        "zbx": "Zabbix",
-        "ad": "AD",
-        "sdp": "SDP",
-    }
     for i, (skey, sf) in enumerate(sorted(freshness.items())):
         with fcols[i]:
-            label = src_labels.get(skey, skey)
+            label = _src_labels.get(skey, skey)
             row_count = sf.get("row_count", 0)
             newest_raw = sf.get("newest_record", "")
             try:

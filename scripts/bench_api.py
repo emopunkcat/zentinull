@@ -65,7 +65,7 @@ ENDPOINT_BENCHMARKS: list[tuple[str, str, dict[str, Any] | None, str]] = [
 
 def _create_seeded_db(path: Path) -> None:
     """Create a temporary DuckDB with seeded data — matches test fixture shape."""
-    from zentinull.api.schema import DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
+    from zentinull.api.schema import ATTACHMENTS_SQL, DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
 
     conn = duckdb.connect(str(path))
     now = datetime.now(UTC)
@@ -207,6 +207,9 @@ def _create_seeded_db(path: Path) -> None:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             row,
         )
+
+    # ── attachments table ─────────────────────────────────────────────
+    conn.execute(ATTACHMENTS_SQL)
 
     conn.execute(INDEXES_SQL)
     conn.execute("CHECKPOINT")

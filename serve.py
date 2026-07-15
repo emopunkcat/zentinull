@@ -42,9 +42,10 @@ if _dotenv_path.exists():
 
 
 def _setup_logging(json_output: bool = False) -> None:
+    from zentinull.config import PATHS
     from zentinull.logging_config import setup
 
-    setup(level="INFO", json_output=json_output, log_file=str(_HERE / "data" / "pipeline.log"))
+    setup(level="INFO", json_output=json_output, log_file=str(PATHS.log_file))
 
 
 # ── Start ──────────────────────────────────────────────────────────────────────
@@ -54,6 +55,8 @@ def cmd_start(args: argparse.Namespace) -> None:
     """Start the FastAPI server."""
     import uvicorn
 
+    from zentinull.config import API_HOST
+
     _setup_logging(json_output=args.log_json)
     from zentinull.logging_config import get_logger
 
@@ -61,7 +64,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     log.info({"event": "server_start", "port": args.port, "reload": args.reload})
     uvicorn.run(
         "zentinull.api.server:app",
-        host="0.0.0.0",
+        host=API_HOST,
         port=args.port,
         reload=args.reload,
     )
@@ -194,8 +197,9 @@ def cmd_backup(args: argparse.Namespace) -> None:
 
 
 def cmd_logs(args: argparse.Namespace) -> None:
-    """Tail pipeline log file."""
-    log_path = _HERE / "data" / "pipeline.log"
+    from zentinull.config import PATHS
+
+    log_path = PATHS.log_file
 
     if not log_path.exists():
         print("No pipeline log found at data/pipeline.log")
@@ -229,14 +233,191 @@ def cmd_db(args: argparse.Namespace) -> None:
         check_dbs()
 
 
+
+# ── Audit Mapping ──────────────────────────────────────────────────────────────
+
+
+def cmd_audit_mapping(args: argparse.Namespace) -> None:
+    """Propose field mappings or detect drift."""
+    from collections import defaultdict
+    import json
+    import sqlite3
+
+    from zentinull.config import PATHS
+    from zentinull.manifest import load_manifest
+    from zentinull.normalizer import NULL_SENTINELS
+    from zentinull.resolve.classifier import classify_value
+
+    manifest = load_manifest()
+
+    if args.propose:
+        feed_key = args.propose
+        if feed_key not in manifest.feeds:
+            print(f"Error: feed '{feed_key}' not in manifest")
+            sys.exit(1)
+        feed = manifest.feeds[feed_key]
+
+        db_path = PATHS.data_dir / f"{feed.system}.sqlite"
+        if not db_path.exists():
+            print(f"Error: database not found: {db_path}")
+            sys.exit(1)
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            if feed.store not in tables:
+                print(f"Error: table '{feed.store}' not found in {db_path}")
+                sys.exit(1)
+
+            rows = conn.execute(f"SELECT raw_json FROM {feed.store} LIMIT 100").fetchall()
+        finally:
+            conn.close()
+
+        # Collect all keys and sample values (first 4 non-sentinel values per key)
+        key_values: dict[str, set[str]] = defaultdict(set)
+        for r in rows:
+            try:
+                raw = json.loads(r["raw_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for k, v in raw.items():
+                if isinstance(v, str) and v.strip() and v not in NULL_SENTINELS and len(key_values[k]) < 4:
+                    key_values[k].add(v.strip())
+
+        # Find mapped keys (already in spec)
+        mapped_keys_lower = set()
+        for spec in feed.spec.values():
+            for path in spec.paths:
+                mapped_keys_lower.add(path.lower().replace("fields.", ""))
+
+        # Classify unmapped keys
+        unmapped = []
+        for key, vals in sorted(key_values.items()):
+            kl = key.lower()
+            if kl in mapped_keys_lower:
+                continue
+            # Check if any value matches a Tier-1 pattern
+            for val in vals:
+                cls = classify_value(val)
+                if cls:
+                    unmapped.append((key, cls, list(vals)[:2]))
+                    break
+
+        # Emit pasteable FieldSpec
+        for key, target, samples in unmapped:
+            print(f"# {key} → {target}  (e.g., {samples})")
+            print(f'"{key}" = FieldSpec(paths=("{key}",)),  # → {target}')
+
+        if not unmapped:
+            print(f"No unmapped identity-shaped keys found in '{feed_key}'.")
+
+        return
+
+    if args.strict:
+        # Drift mode
+        exit_code = 0
+        high_confidence_patterns = {"mac_address", "ip_address", "imei", "email"}
+
+        for feed_key in manifest.feeds:
+            feed = manifest.feeds[feed_key]
+            db_path = PATHS.data_dir / f"{feed.system}.sqlite"
+            if not db_path.exists():
+                continue
+
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            try:
+                tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+                if feed.store not in tables:
+                    continue
+                rows = conn.execute(f"SELECT raw_json FROM {feed.store}").fetchall()
+            finally:
+                conn.close()
+
+            # Collect all keys and their fill rates
+            key_fill: dict[str, int] = defaultdict(int)
+            total_rows = 0
+            for r in rows:
+                total_rows += 1
+                try:
+                    raw = json.loads(r["raw_json"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                for k, v in raw.items():
+                    if isinstance(v, str) and v.strip() and v not in NULL_SENTINELS:
+                        key_fill[k] += 1
+
+            if total_rows == 0:
+                continue
+
+            # Find mapped keys
+            mapped_keys_lower = set()
+            for spec in feed.spec.values():
+                for path in spec.paths:
+                    mapped_keys_lower.add(path.lower().replace("fields.", ""))
+
+            # Check unmapped high-confidence keys
+            for key, fill_count in key_fill.items():
+                kl = key.lower()
+                if kl in mapped_keys_lower:
+                    continue
+                fill_pct = 100 * fill_count / total_rows
+                if fill_pct < 50:
+                    continue
+                # Sample a value to classify
+                conn = sqlite3.connect(str(db_path))
+                conn.row_factory = sqlite3.Row
+                try:
+                    sample = conn.execute(
+                        f"SELECT raw_json FROM {feed.store} WHERE raw_json LIKE ? LIMIT 1",
+                        [f'%"{key}"%'],
+                    ).fetchone()
+                finally:
+                    conn.close()
+
+                if sample:
+                    try:
+                        raw = json.loads(sample["raw_json"])
+                        val = raw.get(key, "")
+                        if isinstance(val, str):
+                            cls = classify_value(val)
+                            if cls in high_confidence_patterns:
+                                print(f"DRIFT: {feed_key}.{key} looks like {cls} ({fill_pct:.0f}% fill, unmapped)")
+                                exit_code = 1
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        if exit_code:
+            print(f"Drift detected — exiting with code {exit_code}")
+        sys.exit(exit_code)
+
+    print("Error: specify --propose <feed> or --strict")
+    sys.exit(1)
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 
 def main() -> None:
+    # Pre-parse --project before any zentinull import triggers config.PATHS resolution
+    import os
+
+    _project = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--project" and i + 1 < len(sys.argv):
+            _project = sys.argv[i + 1]
+            break
+    if _project:
+        os.environ["ZENTINULL_PROJECT"] = _project
+
+    # Load manifest for dynamic source key references
+    from zentinull.manifest import load_manifest
+    manifest = load_manifest()
+    source_keys = ",".join(sorted(manifest.systems.keys()))
     parser = argparse.ArgumentParser(
         description="Zentinull — device entity resolution pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   python serve.py start --port 9000 --reload
   python serve.py pipeline --skip-ingest
@@ -244,16 +425,21 @@ Examples:
   python serve.py ingest --skip ad,sdp
   python serve.py splink --threshold -5
   python serve.py seed --rows 200 -f
-  python serve.py bench
-  python serve.py bench-api
+  python serve.py --project demo pipeline
+  python serve.py --project demo start
+  # Remote ingest via SSH tunnel (no daemon needed):
   python serve.py backup --output /backups/2026-07-11/
   python serve.py logs --follow
   python serve.py db list
   # Remote ingest via SSH tunnel (no daemon needed):
   #   ./scripts/tunnel.sh user@jump-box serve.py pipeline
 
+
+Available source keys: {source_keys}
 """,
     )
+    parser.add_argument("--project", type=str, default=None, help="Project name (default: 'default')")
+
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # ── start ──
@@ -329,6 +515,12 @@ Examples:
     p_db_vacuum.set_defaults(func=cmd_db)
     p_db_check = p_db_sub.add_parser("check", help="Run integrity check on all SQLite databases")
     p_db_check.set_defaults(func=cmd_db)
+
+    # ── audit-mapping ──
+    p_audit = sub.add_parser("audit-mapping", help="Audit raw key-to-field mappings")
+    p_audit.add_argument("--propose", type=str, help="Feed key to propose mapped fields for")
+    p_audit.add_argument("--strict", action="store_true", help="Exit non-zero on drift")
+    p_audit.set_defaults(func=cmd_audit_mapping)
 
     args = parser.parse_args()
 

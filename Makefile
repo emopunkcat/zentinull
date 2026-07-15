@@ -94,21 +94,20 @@ build-training:  ## Build training label set for Splink
 	$(PYTHON) scripts/build_training_set.py
 
 run-pipeline: env-check  ## Full pipeline: ingest → export → splink → load
-	$(PYTHON) -m zentinull.pipeline -v
+	$(PYTHON) serve.py pipeline
 
 # ── API ────────────────────────────────────────────────────────────────────
 
 run-api: env-check  ## Start the FastAPI server (default port 8001)
-	$(PYTHON) -m zentinull.api.server
+	$(PYTHON) serve.py start
 
 
 serve: run-api  ## Alias for run-api
 
 run-all: env-check  ## Full pipeline (background) + launch API server
 	@echo "Starting pipeline in background..."
-	$(PYTHON) -m zentinull.pipeline &
-	@echo "Starting API server..."
-	$(PYTHON) -m zentinull.api.server
+	$(PYTHON) serve.py pipeline &
+	$(PYTHON) serve.py start
 
 
 dev:  ## Dev loop: watch files → test-fast → lint on pass

@@ -3,6 +3,28 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
+
+from zentinull.config import ProjectPaths
+
+
+def _make_paths(tmp_path: Path, project: str = "test") -> ProjectPaths:
+    """Build a ProjectPaths rooted under *tmp_path* with data_dir created."""
+    data_dir = tmp_path / "data"
+    export_dir = tmp_path / "export"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return ProjectPaths(
+        project=project,
+        data_dir=data_dir,
+        export_dir=export_dir,
+        mesh_path=data_dir / "mesh.duckdb",
+        status_file=data_dir / "status.json",
+        log_file=data_dir / "pipeline.log",
+        csv_dir=export_dir / "csv",
+        splink_output_dir=export_dir / "splink_output",
+        benchmarks_dir=tmp_path / ".benchmarks",
+    )
+
 
 # ---------------------------------------------------------------------------
 # list_dbs
@@ -13,9 +35,7 @@ def test_list_dbs_empty_dir(tmp_path, monkeypatch, capsys):
     """No .sqlite files → prints warning message."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     from zentinull.cli.db_mgmt import list_dbs
 
@@ -30,8 +50,7 @@ def test_list_dbs_with_one_db(tmp_path, monkeypatch, capsys):
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     db_path = data_dir / "test.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -56,8 +75,7 @@ def test_list_dbs_with_multiple_dbs(tmp_path, monkeypatch, capsys):
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     for name in ("alpha.sqlite", "beta.sqlite"):
         db_path = data_dir / name
@@ -85,9 +103,7 @@ def test_vacuum_dbs_empty_dir(tmp_path, monkeypatch, capsys):
     """No .sqlite files → prints warning message."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     from zentinull.cli.db_mgmt import vacuum_dbs
 
@@ -102,8 +118,7 @@ def test_vacuum_dbs_with_db(tmp_path, monkeypatch, capsys):
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     db_path = data_dir / "test.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -132,9 +147,7 @@ def test_check_dbs_empty(tmp_path, monkeypatch, capsys):
     """No .sqlite files → prints warning message."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     from zentinull.cli.db_mgmt import check_dbs
 
@@ -149,8 +162,7 @@ def test_check_dbs_passes(tmp_path, monkeypatch, capsys):
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     db_path = data_dir / "test.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -171,8 +183,7 @@ def test_check_dbs_corrupt_file(tmp_path, monkeypatch, capsys):
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(db_mgmt_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
 
     db_path = data_dir / "corrupt.sqlite"
     db_path.write_text("not a database file")

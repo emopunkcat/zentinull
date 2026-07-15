@@ -12,90 +12,115 @@ Two loading modes:
 from __future__ import annotations
 
 import csv
-import fcntl
 import json
 import os
 import sqlite3
 import sys
+from datetime import datetime
 from typing import Any
 
 import duckdb
 
-from ..api.schema import DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL, SOURCE_RECORDS_SQL
-from ..config import CSV_DIR, DATA_DIR, MESH_DB, ROOT, SPLINK_OUTPUT_DIR
-from ..contracts import SPLINK_FIELDS
-from ..export_for_splink import _COMPUTED_FIELDS, _SYSTEM_COLS, DEVICE_TABLES, FIELD_MAP
+from ..api.schema import ATTACHMENTS_SQL, DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL, SOURCE_RECORDS_SQL
+from ..config import PATHS, ROOT
 from ..export_for_splink import export as _run_export_fn
+from ..ingest_adapter import run_ingest as _run_ingest_from_adapter
 from ..logging_config import StepTimer, get_logger
+from ..manifest import Manifest, get_system_feeds, load_manifest
+from ..manifest.types import Role
+from ..manifest.walker import walk_feed
+from ..normalizer import normalize_mac, normalize_name, normalize_serial, strip_sentinels
+from ..resolve.attach import resolve_feed_attachments
 from .render import is_brutalist_enabled, render_banner, render_stage
 from .status import record_done, record_fail, record_start
 from .streaming import run_streaming
+
+if sys.platform != "win32":
+    import fcntl  # POSIX advisory file locking (absent on Windows)
+
+
+def _try_flock(fh: Any) -> bool:
+    """Non-blocking exclusive lock. True if acquired.
+
+    Best-effort no-op on Windows (no fcntl) — single-host runs don't contend.
+    """
+    if sys.platform != "win32":
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+    return True
+
 
 PYTHON = sys.executable or "python3"
 
 log = get_logger("cli.pipeline")
 
-SOURCE_MAP: dict[str, tuple[str, str]] = {
-    "sp": ("sharepoint", "SharePoint"),
-    "me": ("manageengine", "ManageEngine"),
-    "fg": ("fortigate", "FortiGate"),
-    "zbx": ("zabbix", "Zabbix"),
-    "ad": ("ad", "Active Directory"),
-    "sdp": ("servicedeskplus", "ServiceDesk Plus"),
-}
 
-SOURCE_TO_TABLES: dict[str, list[str]] = {
-    "sp": ["sp"],
-    "me": ["me_ec", "me_mdm"],
-    "fg": ["fg"],
-    "zbx": ["zbx"],
-    "ad": ["ad"],
-    "sdp": ["sdp"],
+def _get_manifest() -> Manifest:
+    """Load and cache the manifest for the current project."""
+    if not hasattr(_get_manifest, "_cache"):
+        _get_manifest._cache = load_manifest()  # type: ignore
+    return _get_manifest._cache  # type: ignore
+
+
+def _build_source_map() -> dict[str, tuple[str, str]]:
+    """Derive _SOURCE_MAP from manifest: system_key → (module_name, display_name)."""
+    manifest = _get_manifest()
+    return {key: (key, system.label) for key, system in manifest.systems.items()}
+
+
+def _build_source_to_tables() -> dict[str, list[str]]:
+    """Derive _SOURCE_TO_TABLES from manifest: system_key → list of anchor feed keys."""
+    manifest = _get_manifest()
+    result: dict[str, list[str]] = {}
+    for system_key in manifest.systems:
+        feed_keys = get_system_feeds(manifest, system_key)
+        anchor_feeds = [fk for fk in feed_keys if manifest.feeds[fk].role == Role.ANCHOR]
+        result[system_key] = anchor_feeds
+    return result
+
+
+# Module-level dicts derived from manifest
+_SOURCE_MAP = _build_source_map()
+_SOURCE_TO_TABLES = _build_source_to_tables()
+
+# Feed key → source column value mapping (preserves current CSV source values for backward compat)
+_FEED_SOURCE_MAP: dict[str, str] = {
+    "sp_devices": "sp",
+    "me_ec": "me_ec",
+    "me_mdm": "me_mdm",
+    "fg_clients": "fg",
+    "fg_dhcp": "fg_dhcp",
+    "zbx_hosts": "zbx",
+    "ad_computers": "ad",
+    "sdp_assets": "sdp",
 }
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
 
 
 def run_ingest(sources: list[str] | None = None, skip_sources: list[str] | None = None) -> dict[str, int]:
-    """Run ingestors in-process via direct import.
+    """Run ingestors in-process via manifest-driven adapter.
 
-    If sources is None, all 6 sources are run.
-    Each source runs in its own module's ingest() function.
+    If sources is None, all systems in the manifest are run.
+    Each system runs via its legacy ingest() function through the adapter.
 
-    Returns dict of source_name → row_count.
+    Returns dict of display_name → row_count.
     """
-    from ..ingestors import ad, fortigate, manageengine, servicedeskplus, sharepoint, zabbix
-
-    module_by_key: dict[str, Any] = {
-        "sp": sharepoint,
-        "me": manageengine,
-        "fg": fortigate,
-        "zbx": zabbix,
-        "ad": ad,
-        "sdp": servicedeskplus,
-    }
-
-    if sources is None:
-        sources = list(SOURCE_MAP.keys())
-
-    skip_set = set(skip_sources or [])
-    source_keys = [k for k in sources if k not in skip_set and k in SOURCE_MAP]
+    manifest = _get_manifest()
 
     record_start("ingest")
-    results: dict[str, int] = {}
+    raw_results: dict[str, int] = {}
 
     with StepTimer(log, "ingest"):
-        for key in source_keys:
-            _module_key, display_name = SOURCE_MAP[key]
-            mod = module_by_key[key]
-            log.info({"event": "ingesting", "source": display_name})
-            try:
-                n: int = mod.ingest()
-                results[display_name] = n
-                log.info({"event": "ingested", "source": display_name, "rows": n})
-            except Exception as e:
-                log.error({"event": "ingest_failed", "source": display_name, "error": str(e)})
-                results[display_name] = -1
+        raw_results = _run_ingest_from_adapter(manifest, sources=sources, skip_sources=skip_sources)
+
+    # Map system keys to display names for backward compatibility
+    results: dict[str, int] = {}
+    for system_key, count in raw_results.items():
+        display_name = manifest.systems[system_key].label if system_key in manifest.systems else system_key
+        results[display_name] = count
 
     succeeded = sum(1 for v in results.values() if v >= 0)
     record_done("ingest", total=len(results), succeeded=succeeded)
@@ -114,7 +139,7 @@ def run_export() -> int:
     with StepTimer(log, "export"):
         _run_export_fn()
 
-    csv_path = CSV_DIR / "devices.csv"
+    csv_path = PATHS.csv_dir / "devices.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"Export did not produce {csv_path}")
 
@@ -122,114 +147,114 @@ def run_export() -> int:
         total = sum(1 for _ in f) - 1  # minus header row
 
     record_done("export", total=total)
+
+    # Record coverage baseline for drift detection
+    _record_coverage_baseline()
+
     return max(total, 0)
 
 
+def _record_coverage_baseline() -> None:
+    """Compute per-source, per-field fill rates from devices.csv and persist."""
+    import csv
+    from collections import defaultdict
+
+    from .status import record_coverage_baseline
+
+    csv_path = PATHS.csv_dir / "devices.csv"
+    if not csv_path.exists():
+        return
+
+    with open(csv_path, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    by_source: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for r in rows:
+        by_source[r["source"]].append(r)
+
+    manifest = _get_manifest()
+    profile_fields = manifest.profiles["device"].fields
+
+    baseline: dict[str, dict[str, int]] = {}
+    for src, recs in by_source.items():
+        n = len(recs)
+        src_baseline: dict[str, int] = {}
+        for field in profile_fields:
+            if field in {"source", "source_id", "name_clean", "mac_clean", "extra_attributes"}:
+                continue
+            filled = sum(1 for r in recs if r.get(field, "").strip())
+            src_baseline[field] = round(100 * filled / n) if n else 0
+        baseline[src] = src_baseline
+
+    record_coverage_baseline(baseline)
+
+
 def export_source(source_key: str) -> int:
-    """Export a single source to its own CSV file.
+    """Export a single source to its own CSV file using the manifest walker.
 
     Returns record count for that source.
     """
-    if source_key not in SOURCE_TO_TABLES:
+    manifest = _get_manifest()
+    profile = manifest.profiles["device"]
+    splink_fields = list(profile.fields)
+    if source_key not in _SOURCE_TO_TABLES:
         raise ValueError(f"Unknown source key: {source_key}")
 
-    splink_lower: dict[str, str] = {sf.lower(): sf for sf in SPLINK_FIELDS if sf not in _COMPUTED_FIELDS}
     all_rows: list[dict[str, str]] = []
+    feed_keys = _SOURCE_TO_TABLES[source_key]
 
-    for table_key in SOURCE_TO_TABLES[source_key]:
-        db_file = table_key.split("_")[0]
-        db_path = DATA_DIR / f"{db_file}.sqlite"
+    for feed_key in feed_keys:
+        feed = manifest.feeds[feed_key]
+        db_file = feed.system
+        db_path = PATHS.data_dir / f"{db_file}.sqlite"
         if not db_path.exists():
-            log.warning({"event": "skip", "source": table_key, "reason": "db_not_found"})
+            log.warning({"event": "skip", "source": feed_key, "reason": "db_not_found"})
             continue
 
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
 
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        table_name = DEVICE_TABLES[table_key]
-        if table_name not in tables:
-            log.warning({"event": "skip", "source": table_key, "reason": "table_not_found"})
+        if feed.store not in tables:
+            log.warning({"event": "skip", "source": feed_key, "reason": "table_not_found"})
             conn.close()
             continue
-
-        col_rows = conn.execute(f"SELECT name FROM pragma_table_info('{table_name}')").fetchall()
-        typed_cols = [r[0] for r in col_rows]
-
-        explicit = FIELD_MAP.get(table_key, {})
-        mapper = dict(explicit)
-        mapped_source_cols = set(explicit.keys())
-        for col in typed_cols:
-            if col in _SYSTEM_COLS or col in mapped_source_cols:
-                continue
-            match = splink_lower.get(col.lower())
-            if match and match not in mapper.values():
-                mapper[col] = match
-                mapped_source_cols.add(col)
-
-        extra_source_cols = [c for c in typed_cols if c not in _SYSTEM_COLS and c not in mapped_source_cols]
 
         try:
-            rows = conn.execute(f"SELECT * FROM {table_name}").fetchall()
+            rows = conn.execute(f"SELECT * FROM {feed.store}").fetchall()
         except Exception as e:
-            log.warning({"event": "skip", "source": table_key, "reason": "error", "error": str(e)})
+            log.warning({"event": "skip", "source": feed_key, "reason": "error", "error": str(e)})
             conn.close()
             continue
 
-        for row in rows:
-            row_dict = dict(row)
-            rec = {f: "" for f in SPLINK_FIELDS}
-            rec["source"] = table_key
-            for col_name, splink_field in mapper.items():
-                val = row_dict.get(col_name, "")
-                if val and str(val).strip():
-                    val_str = str(val).strip()
-                    existing = rec.get(splink_field, "")
-                    if existing:
-                        if val_str not in existing.split(","):
-                            rec[splink_field] = f"{existing},{val_str}"
-                    else:
-                        rec[splink_field] = val_str
+        extracted = walk_feed(feed, rows)
 
-            name_raw = rec.get("name", "")
-            rec["name_clean"] = name_raw.lower().split(".")[0] if name_raw else ""
-            mac_raw = rec.get("mac_address", "")
-            mac_clean = mac_raw.lower().replace(":", "").replace("-", "").replace(".", "").split(",")[0]
-            rec["mac_clean"] = mac_clean if len(mac_clean) == 12 else ""
-            if not rec["source_id"]:
-                rec["source_id"] = str(row_dict.get("id", ""))
+        for rec in extracted:
+            rec["source"] = _FEED_SOURCE_MAP.get(feed_key, feed_key)
+            # Derived fields for Splink matching
+            rec["name_clean"] = normalize_name(rec.get("name", ""))
+            rec["mac_clean"] = normalize_mac(rec.get("mac_address", ""))
+            rec["serial_number"] = normalize_serial(rec.get("serial_number", ""))
+            if rec.get("manufacturer"):
+                rec["manufacturer"] = rec["manufacturer"].lower()
+            # Strip sentinels on all target fields
+            for fld in splink_fields:
+                if fld in ("source", "source_id", "name_clean", "mac_clean", "extra_attributes"):
+                    continue
+                rec[fld] = strip_sentinels(rec.get(fld, ""))
+            # Fill missing fields
+            for fld in splink_fields:
+                if fld not in rec:
+                    rec[fld] = ""
 
-            extra: dict[str, str] = {}
-            for col in extra_source_cols:
-                val = row_dict.get(col, "")
-                if val and str(val).strip():
-                    extra[col] = str(val).strip()
-            raw = row_dict.get("raw_json", "")
-            if raw and isinstance(raw, str):
-                try:
-                    raw_dict = json.loads(raw)
-                except (json.JSONDecodeError, TypeError):
-                    raw_dict = {}
-                if isinstance(raw_dict, dict):
-                    for k, v in raw_dict.items():
-                        if (
-                            k not in typed_cols
-                            and k not in extra
-                            and k not in _SYSTEM_COLS
-                            and k not in mapped_source_cols
-                            and v
-                            and str(v).strip()
-                        ):
-                            extra[k] = str(v).strip()
-            rec["extra_attributes"] = json.dumps(extra) if extra else ""
-            all_rows.append(rec)
-
+        all_rows.extend(extracted)
         conn.close()
 
-    out_path = CSV_DIR / f"{source_key}.csv"
-    CSV_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = PATHS.csv_dir / f"{source_key}.csv"
+    PATHS.csv_dir.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=SPLINK_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=splink_fields)
         writer.writeheader()
         writer.writerows(all_rows)
 
@@ -271,18 +296,137 @@ def run_splink(*, skip_training: bool = False, threshold: int | None = None) -> 
 # ── Load ───────────────────────────────────────────────────────────────────────
 
 
+def _load_zbx_metrics(conn: duckdb.DuckDBPyConnection) -> int:
+    """Load Zabbix items into the metrics table, linked to device clusters by hostid.
+
+    Reads zbx.sqlite items, resolves each item's hostid → cluster_id via
+    source_records (source='zbx', source_id=hostid), and inserts into metrics.
+    Silently returns 0 if zbx.sqlite or items table is missing.
+    """
+    zbx_db = PATHS.data_dir / "zbx.sqlite"
+    if not zbx_db.exists():
+        return 0
+
+    zbx_conn = sqlite3.connect(str(zbx_db))
+    zbx_conn.row_factory = sqlite3.Row
+
+    try:
+        tables = [r[0] for r in zbx_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        if "hosts" not in tables or "items" not in tables:
+            return 0
+
+        # Build hostid → hostname lookup from hosts raw store
+        host_rows = zbx_conn.execute("SELECT raw_json FROM hosts").fetchall()
+        host_map: dict[str, str] = {}
+        for r in host_rows:
+            try:
+                hdict = json.loads(r["raw_json"])
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            hid = str(hdict.get("hostid", "") or "")
+            hn = str(hdict.get("host", "") or hdict.get("name", "") or "")
+            if hid:
+                host_map[hid] = hn
+
+        item_rows = zbx_conn.execute("SELECT raw_json FROM items").fetchall()
+        if not item_rows:
+            return 0
+
+        inserted = 0
+        for item in item_rows:
+            raw = item["raw_json"]
+            try:
+                item_dict = json.loads(raw)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                log.warning({"event": "zbx_malformed_json", "raw_json_len": len(raw)})
+                continue
+
+            hostid = str(item_dict.get("hostid", "") or "")
+            if not hostid:
+                continue
+
+            # Resolve hostid → cluster_id from source_records
+            row = conn.execute(
+                "SELECT cluster_id FROM source_records WHERE lower(source) = 'zbx' AND source_id::VARCHAR = ?",
+                [hostid],
+            ).fetchone()
+            if row is None:
+                # Fallback: match by name_clean (handles CSV without source_id)
+                hostname = host_map.get(hostid, "")
+                if not hostname:
+                    continue
+                name_clean = hostname.lower().split(".")[0]
+                row = conn.execute(
+                    "SELECT cluster_id FROM source_records WHERE lower(source) = 'zbx' AND lower(name_clean) = ?",
+                    [name_clean.lower()],
+                ).fetchone()
+                if row is None:
+                    continue
+
+            cluster_id: str = str(row[0])
+            metric_name: str = str(item_dict.get("name", ""))
+            lastvalue: str = str(item_dict.get("lastvalue", ""))
+            lastclock: str = str(item_dict.get("lastclock", ""))
+            key_: str = str(item_dict.get("key_", ""))
+            value_type: str = str(item_dict.get("value_type", ""))
+            units: str = str(item_dict.get("units", ""))
+
+            if not lastclock or not metric_name:
+                continue
+
+            # Parse timestamp from Unix epoch
+            try:
+                recorded_at = datetime.fromtimestamp(int(lastclock))
+            except (ValueError, TypeError):
+                continue
+
+            # Parse numeric value; fall back to text
+            value: float | None = None
+            text_value: str = ""
+            if lastvalue:
+                try:
+                    value = float(lastvalue)
+                except (ValueError, TypeError):
+                    text_value = lastvalue
+
+            # Build tags list
+            tags: list[str] = []
+            if key_:
+                tags.append(f"key={key_}")
+            if value_type:
+                tags.append(f"value_type={value_type}")
+            if units:
+                tags.append(f"units={units}")
+
+            conn.execute(
+                """
+                INSERT INTO metrics (cluster_id, source, metric_name, value, text_value, tags, recorded_at)
+                VALUES (?, 'zbx', ?, ?, ?, ?, ?)
+                """,
+                [cluster_id, metric_name, value, text_value, tags, recorded_at],
+            )
+            inserted += 1
+
+        if inserted:
+            log.info({"event": "zbx_metrics_loaded", "rows": inserted})
+        return inserted
+
+    finally:
+        zbx_conn.close()
+
+
 def run_load() -> int:
     """Load clusters.csv into DuckDB mesh using temp-and-swap.
 
     Builds mesh in data/mesh.duckdb.tmp, then atomically renames to mesh.duckdb.
     Returns total device count.
     """
-    csv_path = SPLINK_OUTPUT_DIR / "clusters.csv"
+    csv_path = PATHS.splink_output_dir / "clusters.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"{csv_path} not found — run splink first")
 
-    mesh_path = MESH_DB
-    tmp_path = DATA_DIR / "mesh.duckdb.tmp"
+    mesh_path = PATHS.mesh_path
+    tmp_path = PATHS.data_dir / "mesh.duckdb.tmp"
 
     record_start("load")
 
@@ -303,6 +447,10 @@ def run_load() -> int:
             # Metrics & Events (append-only)
             conn.execute(METRICS_SQL)
             conn.execute(EVENTS_SQL)
+            conn.execute(ATTACHMENTS_SQL)
+
+            # Load Zabbix items into metrics table
+            _load_zbx_metrics(conn)
 
             # Indexes
             conn.execute(INDEXES_SQL)
@@ -332,6 +480,77 @@ def run_load() -> int:
     return device_count
 
 
+def run_attach() -> int:
+    """Run attachment resolution for all ATTACHMENT feeds.
+
+    Called after run_load() produces a fresh mesh. Reads raw stores, resolves
+    links, writes into the attachments table.
+    """
+    if not PATHS.mesh_path.exists():
+        log.warning({"event": "attach_skip", "reason": "mesh_not_found"})
+        return 0
+
+    manifest = _get_manifest()
+    attachment_feeds = [k for k, v in manifest.feeds.items() if v.role == Role.ATTACHMENT]
+
+    if not attachment_feeds:
+        log.info({"event": "attach_skip", "reason": "no_attachment_feeds"})
+        return 0
+
+    record_start("attach")
+    total = 0
+
+    with StepTimer(log, "attach"):
+        for feed_key in attachment_feeds:
+            feed = manifest.feeds[feed_key]
+            sqlite_db_path = str(PATHS.data_dir / f"{feed.system}.sqlite")
+
+            try:
+                rows = resolve_feed_attachments(feed, feed_key, str(PATHS.mesh_path), sqlite_db_path)
+            except Exception as e:
+                log.error({"event": "attach_failed", "feed": feed_key, "error": str(e)})
+                continue
+
+            if not rows:
+                log.info({"event": "attach_empty", "feed": feed_key})
+                continue
+
+            conn = duckdb.connect(str(PATHS.mesh_path), read_only=False)
+            try:
+                conn.execute(ATTACHMENTS_SQL)
+                # Remove stale links for this feed
+                source_ids = [r["source_id"] for r in rows]
+                conn.execute(
+                    "DELETE FROM attachments WHERE feed_key = ? AND source_id = ANY(?)",
+                    [feed_key, source_ids],
+                )
+                # Insert new links
+                conn.executemany(
+                    "INSERT INTO attachments (cluster_id, feed_key, source_id, field, value, confidence, payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            r["cluster_id"],
+                            r["feed_key"],
+                            r["source_id"],
+                            r["field"],
+                            r["value"],
+                            r["confidence"],
+                            r["payload"],
+                        )
+                        for r in rows
+                    ],
+                )
+            finally:
+                conn.close()
+
+            total += len(rows)
+            log.info({"event": "attach_done", "feed": feed_key, "rows": len(rows)})
+
+    record_done("attach", total=total)
+    return total
+
+
 def run_incremental_load(sources: list[str]) -> int:
     """Upsert per-source CSVs into DuckDB and rebuild devices table.
 
@@ -341,14 +560,19 @@ def run_incremental_load(sources: list[str]) -> int:
 
     Returns device count after rebuild.
     """
-    if not MESH_DB.exists():
+    if not PATHS.mesh_path.exists():
         log.warning({"event": "incremental_load_skip", "reason": "mesh_not_found"})
         return 0
 
     record_start("incremental_load")
 
+    # Load profile fields for CSV column iteration
+    manifest = _get_manifest()
+    profile = manifest.profiles["device"]
+    splink_fields = list(profile.fields)
+
     with StepTimer(log, "incremental_load"):
-        conn = duckdb.connect(str(MESH_DB), read_only=False)
+        conn = duckdb.connect(str(PATHS.mesh_path), read_only=False)
         try:
             import contextlib
 
@@ -356,7 +580,7 @@ def run_incremental_load(sources: list[str]) -> int:
                 conn.execute("SELECT DISTINCT cluster_id FROM source_records").fetchall()
 
             for source_key in sources:
-                csv_path = CSV_DIR / f"{source_key}.csv"
+                csv_path = PATHS.csv_dir / f"{source_key}.csv"
                 if not csv_path.exists():
                     log.warning({"event": "incremental_skip", "source": source_key, "reason": "csv_not_found"})
                     continue
@@ -381,7 +605,7 @@ def run_incremental_load(sources: list[str]) -> int:
                         if sid in existing_ids:
                             set_clauses = []
                             values = []
-                            for col in SPLINK_FIELDS:
+                            for col in splink_fields:
                                 if col in ("source", "source_id"):
                                     continue
                                 set_clauses.append(f"{col} = ?")
@@ -394,10 +618,10 @@ def run_incremental_load(sources: list[str]) -> int:
                             updated_count += 1
                         else:
                             cluster_id = f"new-{source_key}-{uuid.uuid4().hex[:8]}"
-                            all_cols = ["cluster_id"] + list(SPLINK_FIELDS)
+                            all_cols = ["cluster_id"] + list(splink_fields)
                             cols = ", ".join(all_cols)
                             placeholders = ", ".join(["?"] * len(all_cols))
-                            values = [cluster_id] + [row_dict.get(c, "") for c in SPLINK_FIELDS]
+                            values = [cluster_id] + [row_dict.get(c, "") for c in splink_fields]
                             conn.execute(f"INSERT INTO source_records ({cols}) VALUES ({placeholders})", values)
                             new_count += 1
 
@@ -436,13 +660,14 @@ def run_incremental_sync(sources: list[str]) -> int:
 
     Returns device count.
     """
-    lock_path = DATA_DIR / "pipeline.lock"
+    lock_path = PATHS.data_dir / "pipeline.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")  # noqa: SIM115
     have_lock = False
     try:
         try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if not _try_flock(lock_file):
+                raise OSError
             have_lock = True
             lock_file.write(str(os.getpid()))
             lock_file.flush()
@@ -458,16 +683,26 @@ def run_incremental_sync(sources: list[str]) -> int:
             render_banner()
             render_stage("INGEST")
         log.info({"event": "sync_stage", "stage": "ingest", "sources": sources})
-        run_ingest(sources=sources)
+        manifest = _get_manifest()
+        from ..ingest import runner  # lazy import to avoid cycles
 
         for source_key in sources:
-            if source_key in SOURCE_TO_TABLES:
+            record_start(f"ingest_{source_key}")
+            try:
+                feed_counts = runner.run_system(source_key, manifest, incremental=True)
+                record_done(f"ingest_{source_key}", total=sum(feed_counts.values()))
+            except Exception as exc:
+                log.exception({"event": "system_ingest_failed", "system": source_key})
+                record_fail(f"ingest_{source_key}", error=str(exc))
+
+        for source_key in sources:
+            if source_key in _SOURCE_TO_TABLES:
                 if is_brutalist_enabled():
                     render_stage(f"EXPORT {source_key.upper()}")
                 log.info({"event": "sync_stage", "stage": "export", "source": source_key})
                 export_source(source_key)
 
-        if not MESH_DB.exists():
+        if not PATHS.mesh_path.exists():
             log.warning({"event": "sync_skip", "reason": "mesh_not_found", "hint": "run full pipeline first"})
             return 0
 
@@ -498,20 +733,21 @@ def run_pipeline(
     sources: list[str] | None = None,
     skip_sources: list[str] | None = None,
 ) -> None:
-    """Run the full pipeline: ingest → export → splink → load.
+    """Run the full pipeline: ingest → export → splink → load → attach.
 
     Each stage is streamed and status-tracked independently.
     Uses a PID-based lock file to prevent concurrent pipeline runs.
     """
 
     # ── Concurrency guard ──────────────────────────────────────────────
-    lock_path = DATA_DIR / "pipeline.lock"
+    lock_path = PATHS.data_dir / "pipeline.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")  # noqa: SIM115
     have_lock = False
     try:
         try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if not _try_flock(lock_file):
+                raise OSError
             have_lock = True
             lock_file.write(str(os.getpid()))
             lock_file.flush()
@@ -547,6 +783,12 @@ def run_pipeline(
             render_stage("LOAD")
         log.info({"event": "pipeline_stage", "stage": "load"})
         device_count = run_load()
+
+        if is_brutalist_enabled():
+            render_stage("ATTACH")
+        log.info({"event": "pipeline_stage", "stage": "attach"})
+        attach_count = run_attach()
+        log.info({"event": "attach_complete", "attachments": attach_count})
 
         log.info({"event": "pipeline_complete", "devices": device_count})
     finally:

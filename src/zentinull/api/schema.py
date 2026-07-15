@@ -9,6 +9,7 @@ Usage:
     conn.execute(DEVICES_SQL)
     conn.execute(METRICS_SQL)
     conn.execute(EVENTS_SQL)
+    conn.execute(ATTACHMENTS_SQL)
     conn.execute(INDEXES_SQL)
     conn.execute("CHECKPOINT")
 """
@@ -17,18 +18,15 @@ from __future__ import annotations
 
 import duckdb
 
-from ..contracts import SPLINK_FIELDS
-
-#: SQL to create source_records from a clusters CSV file (takes one ? param for file path)
+#: SQL to create source_records from a clusters CSV file (takes one ? param for file path).
+#: all_varchar forces every column to VARCHAR — the contract fields are all textual
+#: (see manifest device profile fields / api.models.SourceRecord). Without it, read_csv_auto
+#: infers BIGINT for all-numeric columns (serial_number, imei, cluster_id), which breaks
+#: DEVICES_SQL's `!= ''` comparisons and the API's lower(...) LIKE lookup cascade.
 SOURCE_RECORDS_SQL = """
 CREATE OR REPLACE TABLE source_records AS
-SELECT * FROM read_csv_auto(?)
+SELECT * FROM read_csv_auto(?, all_varchar=true)
 """
-
-#: Column types for explicit DuckDB read_csv — keeps schema in sync
-#: with SPLINK_FIELDS. Defaults to VARCHAR; set to None for auto-detect per column.
-#: Reserved for future explicit-typing migration in create_mesh_tables().
-SPLINK_COLS: dict[str, str | None] = {f: None for f in SPLINK_FIELDS}
 
 #: Build the consolidated devices table from source_records
 DEVICES_SQL = """
@@ -77,6 +75,20 @@ CREATE TABLE IF NOT EXISTS events (
 )
 """
 
+#: Append-only attachments table — linked records (never merged into anchors)
+ATTACHMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS attachments (
+    cluster_id TEXT NOT NULL,
+    feed_key TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.5,
+    payload TEXT DEFAULT '{}',
+    linked_at TIMESTAMP DEFAULT now()
+)
+"""
+
 #: All indexes for the mesh schema
 INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(device_name);
@@ -85,7 +97,8 @@ CREATE INDEX IF NOT EXISTS idx_records_cluster ON source_records(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_records_mac ON source_records(mac_clean);
 CREATE INDEX IF NOT EXISTS idx_metrics_cluster_time ON metrics(cluster_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(metric_name, recorded_at);
-CREATE INDEX IF NOT EXISTS idx_events_cluster_time ON events(cluster_id, recorded_at)
+CREATE INDEX IF NOT EXISTS idx_events_cluster_time ON events(cluster_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_attachments_cluster ON attachments(cluster_id)
 """
 
 
@@ -100,5 +113,6 @@ def create_mesh_tables(conn: duckdb.DuckDBPyConnection, csv_path: str) -> None:
     conn.execute(DEVICES_SQL)
     conn.execute(METRICS_SQL)
     conn.execute(EVENTS_SQL)
+    conn.execute(ATTACHMENTS_SQL)
     conn.execute(INDEXES_SQL)
     conn.execute("CHECKPOINT")

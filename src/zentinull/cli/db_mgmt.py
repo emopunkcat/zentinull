@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from ..config import DATA_DIR
+from ..config import PATHS
 from ..logging_config import get_logger
 
 log = get_logger("cli.db_mgmt")
@@ -34,9 +34,9 @@ def _fmt_size(bytes_: int) -> str:
 
 def _get_db_files() -> list[Path]:
     """Return sorted list of .sqlite file paths in the data directory."""
-    if not DATA_DIR.is_dir():
+    if not PATHS.data_dir.is_dir():
         return []
-    return sorted(DATA_DIR.glob("*.sqlite"), key=lambda p: p.name)
+    return sorted(PATHS.data_dir.glob("*.sqlite"), key=lambda p: p.name)
 
 
 def _table_rows(conn: sqlite3.Connection, table: str) -> int:
@@ -56,8 +56,8 @@ def list_dbs() -> None:
     db_files = _get_db_files()
 
     if not db_files:
-        log.warning({"event": "no_db_files", "dir": str(DATA_DIR)})
-        print(f"No .sqlite files found in {DATA_DIR}")
+        log.warning({"event": "no_db_files", "dir": str(PATHS.data_dir)})
+        print(f"No .sqlite files found in {PATHS.data_dir}")
         return
 
     total_size = 0
@@ -121,8 +121,8 @@ def vacuum_dbs() -> None:
     db_files = _get_db_files()
 
     if not db_files:
-        log.warning({"event": "no_db_files", "dir": str(DATA_DIR)})
-        print(f"No .sqlite files found in {DATA_DIR}")
+        log.warning({"event": "no_db_files", "dir": str(PATHS.data_dir)})
+        print(f"No .sqlite files found in {PATHS.data_dir}")
         return
 
     total_saved = 0
@@ -199,8 +199,8 @@ def check_dbs() -> None:
     db_files = _get_db_files()
 
     if not db_files:
-        log.warning({"event": "no_db_files", "dir": str(DATA_DIR)})
-        print(f"No .sqlite files found in {DATA_DIR}")
+        log.warning({"event": "no_db_files", "dir": str(PATHS.data_dir)})
+        print(f"No .sqlite files found in {PATHS.data_dir}")
         return
 
     col_file = max(len(p.name) for p in db_files)

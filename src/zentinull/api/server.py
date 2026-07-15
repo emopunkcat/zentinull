@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -11,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..config import API_HOST, API_PORT, MESH_DB, _load_dotenv
+from ..config import PATHS, _load_dotenv
 from ..logging_config import get_logger, request_id_var, setup
 from .db import MeshDB
 from .metrics import metrics
@@ -25,12 +24,12 @@ log = get_logger("api.server")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup(level="INFO")
-    if not MESH_DB.exists():
-        log.warning({"event": "mesh_not_found", "path": str(MESH_DB)})
+    if not PATHS.mesh_path.exists():
+        log.warning({"event": "mesh_not_found", "path": str(PATHS.mesh_path)})
         app.state.db = None
     else:
-        app.state.db = MeshDB(MESH_DB)
-        log.info({"event": "mesh_connected", "path": str(MESH_DB)})
+        app.state.db = MeshDB(PATHS.mesh_path)
+        log.info({"event": "mesh_connected", "path": str(PATHS.mesh_path)})
     yield
 
 
@@ -84,14 +83,3 @@ async def add_request_id(
 
 
 app.include_router(router)
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    port = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[1] == "--port" else API_PORT
-    reload = "--reload" in sys.argv
-    log.info({"event": "server_start", "url": f"http://{API_HOST}:{port}"})
-    log.info({"event": "server_start", "url": f"http://{API_HOST}:{port}/device-view?q=ws28", "desc": "device view"})
-    log.info({"event": "server_start", "url": f"http://{API_HOST}:{port}/docs", "desc": "docs"})
-    uvicorn.run("zentinull.api.server:app", host=API_HOST, port=port, reload=reload)

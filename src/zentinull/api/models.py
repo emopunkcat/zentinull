@@ -85,6 +85,8 @@ class DashboardStats(BaseModel):
     sources: dict[str, int] = Field(default_factory=dict)
     coverage: dict[str, str] = Field(default_factory=dict)
     top_clusters: list[ClusterInfo] = Field(default_factory=list)
+    source_count_dist: dict[str, int] = Field(default_factory=dict)
+    source_combos: dict[str, int] = Field(default_factory=dict)
 
 
 class AnomaliesReport(BaseModel):
@@ -125,3 +127,94 @@ class EventRecord(BaseModel):
     severity: str = "info"
     recorded_at: str = ""
     ingested_at: str = ""
+
+
+class DeviceMetricsResponse(BaseModel):
+    """Metrics response for a device — typed with MetricRecord."""
+
+    query: str
+    cluster_id: str
+    metric_names: list[str] = Field(default_factory=list)
+    count: int = 0
+    metrics: list[MetricRecord] = Field(default_factory=list)
+
+
+class DeviceTimelineResponse(BaseModel):
+    """Timeline response for a device — typed with EventRecord."""
+
+    query: str
+    cluster_id: str
+    hours: int = 168
+    count: int = 0
+    events: list[EventRecord] = Field(default_factory=list)
+
+
+class AttachmentRecord(BaseModel):
+    """A linked attachment record (ticket, metric context, note)."""
+
+    feed_key: str = ""
+    source_id: str = ""
+    field: str = ""
+    value: str = ""
+    confidence: float = 0.5
+    payload: dict[str, Any] = Field(default_factory=dict)
+    linked_at: str = ""
+
+
+class DeviceAttachmentsResponse(BaseModel):
+    """GET /device/{query}/attachments — linked attachment records."""
+
+    cluster_id: str = ""
+    attachments: list[AttachmentRecord] = Field(default_factory=list)
+
+
+class ClusterListResponse(BaseModel):
+    """Paginated cluster listing — GET /clusters."""
+
+    total: int = 0
+    offset: int = 0
+    items: list[ClusterInfo] = Field(default_factory=list)
+
+
+class MetricLatest(BaseModel):
+    """Latest observed value for a single metric name."""
+
+    value: float | None = None
+    text: str | None = None
+    source: str = ""
+    recorded_at: str = ""
+
+
+class MetricAggregate(BaseModel):
+    """avg/max/min/latest/count summary for a single metric name over a window."""
+
+    count: int = 0
+    avg: float | None = None
+    max: float | None = None
+    min: float | None = None
+    latest: float | None = None
+
+
+class DeviceStatsBlock(BaseModel):
+    """Current-state block: latest per-metric values + event severity counts."""
+
+    metrics: dict[str, MetricLatest] = Field(default_factory=dict)
+    event_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class DeviceStatsResponse(BaseModel):
+    """GET /device/{query}/stats — current state + 24h metric summary."""
+
+    query: str
+    cluster_id: str
+    stats: DeviceStatsBlock = Field(default_factory=DeviceStatsBlock)
+    metric_summary_24h: dict[str, MetricAggregate] = Field(default_factory=dict)
+
+
+class DeviceMetricSummaryResponse(BaseModel):
+    """GET /device/{query}/metric-summary — aggregated metric stats over a window."""
+
+    query: str
+    cluster_id: str
+    hours: int = 24
+    metrics: dict[str, MetricAggregate] = Field(default_factory=dict)

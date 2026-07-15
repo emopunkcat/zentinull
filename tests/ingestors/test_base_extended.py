@@ -4,15 +4,27 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from unittest.mock import patch
 
 
-def test_db_creates_file(tmp_path):
-    """db() creates a WAL-mode SQLite file under the configured DATA_DIR."""
+def test_db_creates_file(tmp_path, monkeypatch):
+    """db() creates a WAL-mode SQLite file under the configured data_dir."""
+    from zentinull.config import ProjectPaths
+    from zentinull.ingestors import base as base_mod
     from zentinull.ingestors.base import db
 
-    with patch("zentinull.ingestors.base.DATA_DIR", tmp_path):
-        conn = db("test_source")
+    _paths = ProjectPaths(
+        project="test",
+        data_dir=tmp_path,
+        export_dir=tmp_path / "export",
+        mesh_path=tmp_path / "mesh.duckdb",
+        status_file=tmp_path / "status.json",
+        log_file=tmp_path / "pipeline.log",
+        csv_dir=tmp_path / "export" / "csv",
+        splink_output_dir=tmp_path / "export" / "splink_output",
+        benchmarks_dir=tmp_path / ".benchmarks",
+    )
+    monkeypatch.setattr(base_mod, "PATHS", _paths)
+    conn = db("test_source")
 
     assert isinstance(conn, sqlite3.Connection)
     # Verify WAL mode is enabled

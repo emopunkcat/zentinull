@@ -2,19 +2,18 @@
 
 import random
 from collections import defaultdict
-from pathlib import Path
 
 import pandas as pd
 
+from zentinull.config import PATHS
 from zentinull.logging_config import get_logger, setup
 
 random.seed(42)
 setup()
 log = get_logger("training")
 
-ROOT = Path(__file__).resolve().parent.parent
-CSV = str(ROOT / "export" / "csv" / "devices.csv")
-OUT = str(ROOT / "export" / "splink_output" / "training_labels.csv")
+CSV = str(PATHS.csv_dir / "devices.csv")
+OUT = str(PATHS.splink_output_dir / "training_labels.csv")
 
 df = pd.read_csv(CSV)
 df.columns = [c.strip() for c in df.columns]
