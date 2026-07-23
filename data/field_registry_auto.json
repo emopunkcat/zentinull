@@ -1,0 +1,196 @@
+{
+  "purchase_cost": [
+    [
+      "sp",
+      "fields.Cost"
+    ],
+    [
+      "sdp",
+      "purchase_cost"
+    ]
+  ],
+  "purchase_order": [
+    [
+      "sp",
+      "fields.PONumber"
+    ],
+    [
+      "sp",
+      "fields.MLPONumber"
+    ]
+  ],
+  "purchase_date": [
+    [
+      "sp",
+      "fields.PurchaseDate"
+    ]
+  ],
+  "total_cost": [
+    [
+      "sp",
+      "fields.TotalofAllPurchasesforDevice"
+    ],
+    [
+      "sdp",
+      "total_cost"
+    ]
+  ],
+  "component_cost": [
+    [
+      "sp",
+      "fields.TotalofComponentPurchases"
+    ]
+  ],
+  "product_number": [
+    [
+      "sp",
+      "fields.ProductNumber"
+    ]
+  ],
+  "phone_number": [
+    [
+      "sp",
+      "fields.MobileNumber"
+    ]
+  ],
+  "iccid": [
+    [
+      "sp",
+      "fields.ICCID"
+    ]
+  ],
+  "mobile_service": [
+    [
+      "sp",
+      "fields.MobileService"
+    ]
+  ],
+  "sim_type": [
+    [
+      "sp",
+      "fields.SIMType"
+    ]
+  ],
+  "category": [
+    [
+      "sp",
+      "fields.ViewCategory"
+    ],
+    [
+      "sdp",
+      "category.name"
+    ]
+  ],
+  "form_factor": [
+    [
+      "sp",
+      "fields.ViewType"
+    ],
+    [
+      "sdp",
+      "product.product_type.display_name"
+    ]
+  ],
+  "tpm_version": [
+    [
+      "sp",
+      "fields.TPMVersion"
+    ]
+  ],
+  "branch_office": [
+    [
+      "me_ec",
+      "branch_office_name"
+    ]
+  ],
+  "agent_version": [
+    [
+      "me_ec",
+      "agent_version"
+    ]
+  ],
+  "agent_status": [
+    [
+      "me_ec",
+      "installation_status"
+    ]
+  ],
+  "live_status": [
+    [
+      "me_ec",
+      "computer_live_status"
+    ]
+  ],
+  "last_scan_time": [
+    [
+      "me_ec",
+      "last_successful_scan"
+    ]
+  ],
+  "domain": [
+    [
+      "me_ec",
+      "domain_netbios_name"
+    ]
+  ],
+  "os_build": [
+    [
+      "me_ec",
+      "build_number"
+    ]
+  ],
+  "os_service_pack": [
+    [
+      "me_ec",
+      "service_pack"
+    ]
+  ],
+  "battery_level": [
+    [
+      "me_mdm",
+      "battery_level"
+    ]
+  ],
+  "udid": [
+    [
+      "me_mdm",
+      "udid"
+    ]
+  ],
+  "owned_by": [
+    [
+      "me_mdm",
+      "owned_by"
+    ]
+  ],
+  "is_supervised": [
+    [
+      "me_mdm",
+      "is_supervised"
+    ]
+  ],
+  "vlan": [
+    [
+      "fg",
+      "detected_interface"
+    ]
+  ],
+  "is_online": [
+    [
+      "fg",
+      "is_online"
+    ]
+  ],
+  "vdom": [
+    [
+      "fg",
+      "vdom"
+    ]
+  ],
+  "location": [
+    [
+      "zbx",
+      "location"
+    ]
+  ]
+}

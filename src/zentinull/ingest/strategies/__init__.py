@@ -31,7 +31,7 @@ def register(name: str) -> Callable[..., Any]:
 
 def _load_strategies() -> None:
     """Import all strategy modules so their @register decorators fire."""
-    from . import json_rpc, ldap, paged_json, rest_json, sdp_cursor  # noqa: F401
+    from . import json_rpc, ldap, paged_json, paged_json_detail, rest_json, sdp_cursor  # noqa: F401
 
 
 _load_strategies()

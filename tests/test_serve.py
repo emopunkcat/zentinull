@@ -64,7 +64,7 @@ class TestCmdLogs:
         from serve import cmd_logs
 
         _paths = _make_paths(tmp_path)
-        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        monkeypatch.setattr("zentinull.config.get_paths", lambda: _paths)
         args = _make_args(follow=False, lines=10)
         cmd_logs(args)
 
@@ -81,7 +81,7 @@ class TestCmdLogs:
         lines = [f"line {i}" for i in range(20)]
         log_file.write_text("\n".join(lines) + "\n")
 
-        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        monkeypatch.setattr("zentinull.config.get_paths", lambda: _paths)
         args = _make_args(follow=False, lines=5)
         cmd_logs(args)
 
@@ -100,7 +100,7 @@ class TestCmdLogs:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.write_text("\n".join(f"line {i}" for i in range(60)) + "\n")
 
-        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        monkeypatch.setattr("zentinull.config.get_paths", lambda: _paths)
         args = _make_args(follow=False, lines=50)
         cmd_logs(args)
 
@@ -118,7 +118,7 @@ class TestCmdLogs:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.write_text("")
 
-        monkeypatch.setattr("zentinull.config.PATHS", _paths)
+        monkeypatch.setattr("zentinull.config.get_paths", lambda: _paths)
         args = _make_args(follow=False, lines=10)
         cmd_logs(args)
 
@@ -340,7 +340,7 @@ class TestCmdBackup:
             cmd_backup(args)
             mock_backup.assert_called_once()
             output_dir_arg = mock_backup.call_args[1]["output_dir"]
-            assert str(output_dir_arg) == "/tmp/custom_backup"
+            assert output_dir_arg == Path("/tmp/custom_backup")
 
         captured = capsys.readouterr()
         assert "Backup complete" in captured.out
@@ -397,7 +397,7 @@ class TestCmdStart:
 
     def test_cmd_start_passes_args(self) -> None:
         from serve import cmd_start
-        from zentinull.config import API_HOST
+        from zentinull.config import get_config
 
         with (
             patch("uvicorn.run") as mock_uvicorn,
@@ -405,16 +405,17 @@ class TestCmdStart:
         ):
             args = _make_args(port=9000, reload=True, log_json=False)
             cmd_start(args)
+            _expected_host = get_config().api_host
             mock_uvicorn.assert_called_once_with(
                 "zentinull.api.server:app",
-                host=API_HOST,
+                host=_expected_host,
                 port=9000,
                 reload=True,
             )
 
     def test_cmd_start_default_port(self) -> None:
         from serve import cmd_start
-        from zentinull.config import API_HOST
+        from zentinull.config import get_config
 
         with (
             patch("uvicorn.run") as mock_uvicorn,
@@ -424,7 +425,7 @@ class TestCmdStart:
             cmd_start(args)
             mock_uvicorn.assert_called_once_with(
                 "zentinull.api.server:app",
-                host=API_HOST,
+                host=get_config().api_host,
                 port=8001,
                 reload=False,
             )

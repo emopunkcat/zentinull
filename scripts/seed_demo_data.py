@@ -20,10 +20,10 @@ import random
 import sys
 from datetime import UTC, datetime, timedelta
 
-from zentinull.config import PATHS
+from zentinull.config import get_paths
 from zentinull.manifest import load_manifest
 
-MESH_DB = PATHS.mesh_path
+MESH_DB = get_paths().mesh_path
 
 # Load manifest to get system keys
 _manifest = load_manifest()
@@ -202,7 +202,8 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
             print(f"  {MESH_DB} exists. Use --force to overwrite.")
             return 0
 
-    from zentinull.api.schema import DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
+    from zentinull.api.schema import EVENTS_SQL, INDEXES_SQL, METRICS_SQL, build_devices_sql
+    from zentinull.manifest import load_manifest
 
     templates = _build_device_templates(row_count)
     now = datetime.now(UTC)
@@ -245,7 +246,6 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
     # Write to DuckDB
     conn = duckdb.connect(str(MESH_DB) + ".tmp")
 
-    # ── source_records table ────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE source_records (
             cluster_id TEXT NOT NULL,
@@ -261,14 +261,18 @@ def seed_demo_data(row_count: int = 80, force: bool = False) -> int:
             os TEXT DEFAULT '',
             assigned_user TEXT DEFAULT '',
             ip_address TEXT DEFAULT '',
-            imei TEXT DEFAULT ''
+            imei TEXT DEFAULT '',
+            extra_attributes TEXT DEFAULT '',
+            os_family TEXT DEFAULT ''
         )
     """)
-    for row in source_records:
-        conn.execute("INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
+    conn.execute(
+        "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", source_records
+    )
 
     # ── devices (consolidated) ──────────────────────────────────────────
-    conn.execute(DEVICES_SQL)
+    profile = load_manifest().profiles["device"]
+    conn.execute(build_devices_sql(profile))
 
     # ── metrics ─────────────────────────────────────────────────────────
     conn.execute(METRICS_SQL)

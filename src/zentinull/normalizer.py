@@ -51,9 +51,12 @@ def normalize_name(val: object) -> str:
     1. Strip sentinel values → ""
     2. Lowercase, trim leading/trailing whitespace
     3. Drop domain suffix (everything after first '.')
+    4. Strip SDP asset ID suffix (e.g. " (241314000004736121)")
 
     Domain suffix stripping prevents 'host.example.com' vs 'host.local'
     from blocking as different names when they represent the same asset.
+    SDP asset ID stripping prevents 'mbiphone-530 (241314000004736137)' vs
+    'mbiphone-530' from blocking as different names.
     """
     if val is None:
         return ""
@@ -63,6 +66,8 @@ def normalize_name(val: object) -> str:
     s = s.lower()
     # Drop domain suffix — keep the first label only
     s = s.split(".")[0]
+    # Strip SDP asset ID suffix — " (241314000004736121)" → ""
+    s = re.sub(r"\s*\(\d{10,}\)$", "", s)
     return s
 
 
@@ -139,3 +144,33 @@ def normalize_serial(val: object) -> str:
     # Strip common prefixes
     s = _SERIAL_PREFIX_RE.sub("", s)
     return s.strip()
+
+
+# ── OS family normalization ────────────────────────────────────────────
+# Ported from Sentinel's human_nuance.json → normalization_rules → operating_system → family_map
+# The only piece of human_nuance.json that crosses over — as a code constant.
+# Matched by substring (checked in dict insertion order, windows first).
+_OS_FAMILY_MAP: dict[str, tuple[str, ...]] = {
+    "windows": ("windows", "microsoft windows"),
+    "macos": ("macos", "mac os", "os x", "darwin"),
+    "ios": ("ios", "ipados"),
+    "android": ("android",),
+    "linux": ("ubuntu", "debian", "centos", "rhel", "red hat", "fedora", "suse", "linux"),
+}
+
+
+def normalize_os_family(val: object) -> str:
+    """Normalize OS string into a family name for Splink exact matching.
+
+    Strips sentinels, lowercases, then maps through ``_OS_FAMILY_MAP``.
+    Unknown non-empty values pass through lowercased; sentinel/empty → "".
+    """
+    s = strip_sentinels(val)
+    if not s:
+        return ""
+    s = s.lower()
+    for family, keywords in _OS_FAMILY_MAP.items():
+        for kw in keywords:
+            if kw in s:
+                return family
+    return s

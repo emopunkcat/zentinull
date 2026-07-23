@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from ..config import PATHS
+from ..config import get_paths
 from ..logging_config import get_logger
 
 log = get_logger("cli.db_mgmt")
@@ -34,9 +34,10 @@ def _fmt_size(bytes_: int) -> str:
 
 def _get_db_files() -> list[Path]:
     """Return sorted list of .sqlite file paths in the data directory."""
-    if not PATHS.data_dir.is_dir():
+    paths = get_paths()
+    if not paths.data_dir.is_dir():
         return []
-    return sorted(PATHS.data_dir.glob("*.sqlite"), key=lambda p: p.name)
+    return sorted(paths.data_dir.glob("*.sqlite"), key=lambda p: p.name)
 
 
 def _table_rows(conn: sqlite3.Connection, table: str) -> int:
@@ -53,11 +54,12 @@ def _table_rows(conn: sqlite3.Connection, table: str) -> int:
 
 def list_dbs() -> None:
     """Print a table of all SQLite databases with their tables, row counts, and file sizes."""
+    paths = get_paths()
     db_files = _get_db_files()
 
     if not db_files:
-        log.warning({"event": "no_db_files", "dir": str(PATHS.data_dir)})
-        print(f"No .sqlite files found in {PATHS.data_dir}")
+        log.warning({"event": "no_db_files", "dir": str(paths.data_dir)})
+        print(f"No .sqlite files found in {paths.data_dir}")
         return
 
     total_size = 0
@@ -118,11 +120,12 @@ def list_dbs() -> None:
 
 def vacuum_dbs() -> None:
     """Run VACUUM on all SQLite databases, reporting size before and after."""
+    paths = get_paths()
     db_files = _get_db_files()
 
     if not db_files:
-        log.warning({"event": "no_db_files", "dir": str(PATHS.data_dir)})
-        print(f"No .sqlite files found in {PATHS.data_dir}")
+        log.warning({"event": "no_db_files", "dir": str(paths.data_dir)})
+        print(f"No .sqlite files found in {paths.data_dir}")
         return
 
     total_saved = 0
@@ -196,11 +199,12 @@ def vacuum_dbs() -> None:
 
 def check_dbs() -> None:
     """Run PRAGMA integrity_check on all SQLite databases, reporting results."""
+    paths = get_paths()
     db_files = _get_db_files()
 
     if not db_files:
-        log.warning({"event": "no_db_files", "dir": str(PATHS.data_dir)})
-        print(f"No .sqlite files found in {PATHS.data_dir}")
+        log.warning({"event": "no_db_files", "dir": str(paths.data_dir)})
+        print(f"No .sqlite files found in {paths.data_dir}")
         return
 
     col_file = max(len(p.name) for p in db_files)

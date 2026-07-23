@@ -28,7 +28,7 @@ def _make_paths(tmp_path: Path, project: str = "test") -> ProjectPaths:
 
 def test_record_start_writes_running(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status, record_start
 
@@ -39,7 +39,7 @@ def test_record_start_writes_running(monkeypatch, tmp_path: Path) -> None:
 
 def test_record_done_writes_ok(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status, record_done, record_start
 
@@ -52,7 +52,7 @@ def test_record_done_writes_ok(monkeypatch, tmp_path: Path) -> None:
 
 def test_record_done_with_stats(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status, record_done, record_start
 
@@ -65,7 +65,7 @@ def test_record_done_with_stats(monkeypatch, tmp_path: Path) -> None:
 
 def test_record_done_load_sets_pipeline_time(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status, record_done, record_start
 
@@ -77,7 +77,7 @@ def test_record_done_load_sets_pipeline_time(monkeypatch, tmp_path: Path) -> Non
 
 def test_record_fail_writes_error(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status, record_fail, record_start
 
@@ -90,7 +90,7 @@ def test_record_fail_writes_error(monkeypatch, tmp_path: Path) -> None:
 
 def test_record_freshness_writes(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status, record_freshness
 
@@ -102,7 +102,7 @@ def test_record_freshness_writes(monkeypatch, tmp_path: Path) -> None:
 
 def test_get_status_returns_default_when_empty(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status
 
@@ -112,7 +112,7 @@ def test_get_status_returns_default_when_empty(monkeypatch, tmp_path: Path) -> N
 
 def test_get_status_returns_data(monkeypatch, tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import get_status, record_done, record_start
 
@@ -125,7 +125,7 @@ def test_get_status_returns_data(monkeypatch, tmp_path: Path) -> None:
 
 def test_print_status_with_stages(monkeypatch, tmp_path: Path, capsys) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import print_status, record_done, record_start
 
@@ -141,7 +141,7 @@ def test_print_status_with_stages(monkeypatch, tmp_path: Path, capsys) -> None:
 
 def test_print_status_empty(monkeypatch, tmp_path: Path, capsys) -> None:
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
     from zentinull.cli.status import print_status
 

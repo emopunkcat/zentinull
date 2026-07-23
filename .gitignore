@@ -18,6 +18,7 @@ venv/
 *.swp
 *.swo
 *.omo
+.codegraph/
 
 # Generated data
 data/*.sqlite
@@ -31,6 +32,7 @@ export/csv/
 export/splink_output/
 data/*.log
 data/status.json
+data/hw_extract_cache.json
 
 # Benchmark artifacts
 .benchmarks/

@@ -13,7 +13,7 @@ import splink.comparison_library as cl
 
 from splink import DuckDBAPI, Linker, SettingsCreator, block_on
 
-from ..config import PATHS
+from ..config import get_paths
 from ..logging_config import get_logger
 from ..manifest.types import Comparison, ResolutionProfile
 
@@ -66,6 +66,7 @@ def run(
     Returns:
         Path to the generated clusters.csv under export/splink_output/.
     """
+    paths = get_paths()
     # ── Load CSV ────────────────────────────────────────────────────────
     df = pd.read_csv(csv_path)
     df.columns = [c.strip() for c in df.columns]
@@ -74,8 +75,8 @@ def run(
 
     if len(df) == 0:
         log.warning({"event": "empty_input", "csv": csv_path})
-        PATHS.splink_output_dir.mkdir(parents=True, exist_ok=True)
-        out_path = PATHS.splink_output_dir / "clusters.csv"
+        paths.splink_output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = paths.splink_output_dir / "clusters.csv"
         pd.DataFrame().to_csv(out_path, index=False)
         return out_path
 
@@ -233,8 +234,8 @@ def run(
             )
 
     # ── Export ──────────────────────────────────────────────────────────
-    PATHS.splink_output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = PATHS.splink_output_dir / "clusters.csv"
+    paths.splink_output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = paths.splink_output_dir / "clusters.csv"
     pd.DataFrame([r for recs in cr.values() for r in recs]).to_csv(out_path, index=False)
     log.info({"event": "export", "path": str(out_path), "records": sum(len(recs) for recs in cr.values())})
 

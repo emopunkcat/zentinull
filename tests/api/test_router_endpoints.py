@@ -27,6 +27,8 @@ class TestDeviceLookup:
                 "record_count": 2,
                 "consolidated": {"name": ["ws28"]},
                 "records": [],
+                "sot": {"name": {"value": "WS28", "source": "sp", "priority": "primary"}},
+                "drift_audit": [],
             }
         )
         resp = client_with_db.get("/device/ws28")
@@ -35,6 +37,9 @@ class TestDeviceLookup:
         assert body["cluster_id"] == "c1"
         assert body["device_name"] == "ws28"
         assert body["source_count"] == 2
+        assert "sot" in body
+        assert "drift_audit" in body
+        assert body["sot"]["name"]["priority"] == "primary"
 
     def test_miss_returns_404(self, client_with_db: TestClient, mock_meshdb: MagicMock) -> None:
         """A missing device returns 404."""
@@ -245,6 +250,12 @@ class TestAnomalies:
             "no_name_list": [],
             "no_serial": 5,
             "no_serial_list": [],
+            "zombies": 3,
+            "zombie_list": [],
+            "hardware_drift": 1,
+            "hardware_drift_list": [],
+            "review_total": 0,
+            "review_list": [],
         }
         resp = client_with_db.get("/anomalies")
         assert resp.status_code == 200
@@ -252,6 +263,8 @@ class TestAnomalies:
         assert body["singletons"] == 10
         assert body["no_name"] == 2
         assert body["no_serial"] == 5
+        assert body["zombies"] == 3
+        assert body["hardware_drift"] == 1
 
 
 class TestDeviceMetrics:
@@ -450,3 +463,45 @@ class TestDeviceView:
         resp = client.get("/device-view?_q=dc01")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestDeviceHistory:
+    """GET /device/{query}/history — field change history."""
+
+    def test_history_empty(self, client_with_db: TestClient, mock_meshdb: MagicMock) -> None:
+        """History endpoint returns empty list when no changes tracked."""
+        story_mock = MagicMock()
+        story_mock.cluster_id = "c1"
+        mock_meshdb.lookup.return_value = story_mock
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.execute.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.description = [
+            ("cluster_id", None, None, None, None, None, None),
+            ("source", None, None, None, None, None, None),
+            ("field", None, None, None, None, None, None),
+            ("old_value", None, None, None, None, None, None),
+            ("new_value", None, None, None, None, None, None),
+            ("changed_at", None, None, None, None, None, None),
+        ]
+        mock_meshdb._conn.return_value = mock_conn
+
+        resp = client_with_db.get("/device/ws28/history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["query"] == "ws28"
+        assert body["cluster_id"] == "c1"
+        assert body["history"] == []
+
+    def test_history_miss_returns_404(self, client_with_db: TestClient, mock_meshdb: MagicMock) -> None:
+        """Unknown device returns 404."""
+        mock_meshdb.lookup.return_value = None
+        resp = client_with_db.get("/device/ghost/history")
+        assert resp.status_code == 404
+
+    def test_history_returns_503_when_no_db(self, client: TestClient) -> None:
+        """When app.state.db is None, return 503."""
+        resp = client.get("/device/test/history")
+        assert resp.status_code == 503

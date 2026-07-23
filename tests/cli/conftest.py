@@ -61,7 +61,7 @@ def isolated_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import zentinull.cli.status as status_mod
 
     paths = _make_paths(tmp_path)
-    monkeypatch.setattr(status_mod, "PATHS", paths)
+    monkeypatch.setattr(status_mod, "get_paths", lambda: paths)
 
 
 @pytest.fixture

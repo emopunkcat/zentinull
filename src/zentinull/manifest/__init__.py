@@ -234,6 +234,16 @@ def _validate(manifest: Manifest) -> None:
             if col not in profile_fields:
                 errors.append(f"Profile '{profile_name}' em_passes column '{col}' not in fields")
 
+    # 11. SOT keys must be in profile fields, SOT values must be valid system keys
+    for prof_name, profile in manifest.profiles.items():
+        for sot_field, (primary, secondary) in profile.sot.items():
+            valid_fields = set(profile.fields) | set(profile.derived)
+            if sot_field not in valid_fields:
+                errors.append(f"profile '{prof_name}' SOT field '{sot_field}' not in profile fields/derived")
+            for src_key in (primary, secondary):
+                if src_key and src_key not in manifest.systems:
+                    errors.append(f"profile '{prof_name}' SOT source '{src_key}' not a valid system")
+
     if errors:
         raise ManifestValidationError("Manifest validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
 

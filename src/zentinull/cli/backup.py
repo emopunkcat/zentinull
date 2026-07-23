@@ -8,7 +8,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..config import PATHS
+from ..config import get_paths
 from ..logging_config import get_logger
 
 log = get_logger("cli.backup")
@@ -43,10 +43,11 @@ def create_backup(output_dir: Path | None = None) -> Path:
         Path to the backup directory.
     """
     now = datetime.now(UTC)
+    paths = get_paths()
     ts_dir = now.strftime("%Y-%m-%dT%H%M%S")
     ts_iso = now.isoformat().replace("+00:00", "Z")
     if output_dir is None:
-        output_dir = PATHS.data_dir / BACKUPS_DIR / ts_dir
+        output_dir = paths.data_dir / BACKUPS_DIR / ts_dir
 
     output_dir.mkdir(parents=True, exist_ok=True)
     log.info({"event": "backup_started", "output_dir": str(output_dir)})
@@ -54,7 +55,7 @@ def create_backup(output_dir: Path | None = None) -> Path:
     manifest_files: dict[str, dict[str, object]] = {}
 
     # ── Phase 1: WAL checkpoint ──────────────────────────────────────────
-    data_path = PATHS.data_dir
+    data_path = paths.data_dir
     sqlite_files = sorted(data_path.glob(SQLITE_GLOB))
     for db_path in sqlite_files:
         try:
@@ -78,12 +79,12 @@ def create_backup(output_dir: Path | None = None) -> Path:
             manifest_files[db_path.name] = {"size_bytes": size_bytes, "copied": False}
 
     # ── Phase 3: Copy DuckDB mesh ────────────────────────────────────────
-    mesh_name = PATHS.mesh_path.name
-    if PATHS.mesh_path.exists():
-        size_bytes = PATHS.mesh_path.stat().st_size
+    mesh_name = paths.mesh_path.name
+    if paths.mesh_path.exists():
+        size_bytes = paths.mesh_path.stat().st_size
         print(f"Backing up {mesh_name} ({_fmt_bytes(size_bytes)})...")
         try:
-            shutil.copy2(PATHS.mesh_path, output_dir / mesh_name)
+            shutil.copy2(paths.mesh_path, output_dir / mesh_name)
             manifest_files[mesh_name] = {"size_bytes": size_bytes, "copied": True}
             log.info({"event": "copied", "file": mesh_name, "size_bytes": size_bytes})
         except Exception as exc:
@@ -93,9 +94,9 @@ def create_backup(output_dir: Path | None = None) -> Path:
         log.info({"event": "skipped", "file": mesh_name, "reason": "not_found"})
 
     # ── Phase 4: Copy export directory ───────────────────────────────────
-    export_path = PATHS.export_dir
+    export_path = paths.export_dir
     if export_path.is_dir():
-        dest_export = output_dir / PATHS.export_dir.name
+        dest_export = output_dir / paths.export_dir.name
         dest_export.mkdir(parents=True, exist_ok=True)
         for src_file in export_path.rglob("*"):
             if src_file.is_file():
@@ -103,7 +104,7 @@ def create_backup(output_dir: Path | None = None) -> Path:
                 dest_file = dest_export / rel
                 dest_file.parent.mkdir(parents=True, exist_ok=True)
                 size_bytes = src_file.stat().st_size
-                key = f"{PATHS.export_dir.name}/{rel.as_posix()}"
+                key = f"{paths.export_dir.name}/{rel.as_posix()}"
                 print(f"Backing up {key} ({_fmt_bytes(size_bytes)})...")
                 try:
                     shutil.copy2(src_file, dest_file)
@@ -113,7 +114,7 @@ def create_backup(output_dir: Path | None = None) -> Path:
                     log.error({"event": "copy_failed", "file": key, "error": str(exc)})
                     manifest_files[key] = {"size_bytes": size_bytes, "copied": False}
     else:
-        log.info({"event": "skipped", "file": PATHS.export_dir.name, "reason": "not_found"})
+        log.info({"event": "skipped", "file": paths.export_dir.name, "reason": "not_found"})
 
     # ── Phase 5: Write manifest ──────────────────────────────────────────
     manifest = {

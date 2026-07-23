@@ -167,6 +167,9 @@ class ResolutionProfile:
     sweep_thresholds: tuple[float, ...] = ()
     u_max_pairs: int | None = None
     lambda_recall: float = 0.5  # MUST equal config.SPLINK_LAMBDA_RECALL default
+    sot: Mapping[str, tuple[str, str]] = field(default_factory=dict)
+    # per-field (primary_source, secondary_source).
+    # e.g. {"name": ("sp", ""), "serial_number": ("me", "sp")}
 
 
 @dataclass(frozen=True)

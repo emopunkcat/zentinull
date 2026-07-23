@@ -42,20 +42,27 @@ if _dotenv_path.exists():
 
 
 def _setup_logging(json_output: bool = False) -> None:
-    from zentinull.config import PATHS
+    from zentinull.config import get_paths
     from zentinull.logging_config import setup
 
-    setup(level="INFO", json_output=json_output, log_file=str(PATHS.log_file))
+    paths = get_paths()
+    setup(level="INFO", json_output=json_output, log_file=str(paths.log_file))
 
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 
 
 def cmd_start(args: argparse.Namespace) -> None:
-    """Start the FastAPI server."""
+    """Start the live API server with background data refresh.
+
+    This is the single 24/7 command: the FastAPI server serves queries while
+    a background scheduler runs incremental ingest and periodic Splink re-clustering
+    on their configured intervals (from manifest System.schedule, overridable via
+    ZENTINULL_SCHED_* env vars).  No separate worker process needed.
+    """
     import uvicorn
 
-    from zentinull.config import API_HOST
+    from zentinull.config import get_config
 
     _setup_logging(json_output=args.log_json)
     from zentinull.logging_config import get_logger
@@ -64,7 +71,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     log.info({"event": "server_start", "port": args.port, "reload": args.reload})
     uvicorn.run(
         "zentinull.api.server:app",
-        host=API_HOST,
+        host=get_config().api_host,
         port=args.port,
         reload=args.reload,
     )
@@ -197,9 +204,9 @@ def cmd_backup(args: argparse.Namespace) -> None:
 
 
 def cmd_logs(args: argparse.Namespace) -> None:
-    from zentinull.config import PATHS
+    from zentinull.config import get_paths
 
-    log_path = PATHS.log_file
+    log_path = get_paths().log_file
 
     if not log_path.exists():
         print("No pipeline log found at data/pipeline.log")
@@ -239,11 +246,11 @@ def cmd_db(args: argparse.Namespace) -> None:
 
 def cmd_audit_mapping(args: argparse.Namespace) -> None:
     """Propose field mappings or detect drift."""
-    from collections import defaultdict
     import json
     import sqlite3
+    from collections import defaultdict
 
-    from zentinull.config import PATHS
+    from zentinull.config import get_paths
     from zentinull.manifest import load_manifest
     from zentinull.normalizer import NULL_SENTINELS
     from zentinull.resolve.classifier import classify_value
@@ -257,7 +264,7 @@ def cmd_audit_mapping(args: argparse.Namespace) -> None:
             sys.exit(1)
         feed = manifest.feeds[feed_key]
 
-        db_path = PATHS.data_dir / f"{feed.system}.sqlite"
+        db_path = get_paths().data_dir / f"{feed.system}.sqlite"
         if not db_path.exists():
             print(f"Error: database not found: {db_path}")
             sys.exit(1)
@@ -321,7 +328,7 @@ def cmd_audit_mapping(args: argparse.Namespace) -> None:
 
         for feed_key in manifest.feeds:
             feed = manifest.feeds[feed_key]
-            db_path = PATHS.data_dir / f"{feed.system}.sqlite"
+            db_path = get_paths().data_dir / f"{feed.system}.sqlite"
             if not db_path.exists():
                 continue
 

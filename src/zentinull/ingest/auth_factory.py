@@ -8,19 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import (
-    AD_PASSWORD,
-    AD_SERVER,
-    AD_USER,
-    FG_API_KEY,
-    ME_CLIENT_ID,
-    ME_CLIENT_SECRET,
-    ME_OAUTH_FILE,
-    SDP_CLIENT_ID,
-    SDP_CLIENT_SECRET,
-    SDP_OAUTH_FILE,
-    ZBX_TOKEN,
-)
+from ..config import get_config
 from ..ingestors.auth import APIKeyAuth, LDAPBindAuth, OAuth2RefreshAuth
 from ..manifest.types import Auth
 
@@ -32,12 +20,13 @@ def build_auth(auth_cfg: Auth) -> Any:
         Auth object with a ``get_headers()`` method (APIKeyAuth, OAuth2RefreshAuth)
         or a ``bind()`` method (LDAPBindAuth).
     """
+    cfg = get_config()
     kind = auth_cfg.kind
     opts = auth_cfg.options
 
     if kind == "api_key":
         return APIKeyAuth(
-            api_key=ZBX_TOKEN if opts.get("api_key") == "ZBX_TOKEN" else FG_API_KEY,
+            api_key=cfg.zbx_token if opts.get("api_key") == "ZBX_TOKEN" else cfg.fg_api_key,
             header_name="Authorization",
             prefix="Bearer",
         )
@@ -46,13 +35,13 @@ def build_auth(auth_cfg: Auth) -> Any:
         # Determine which service from env-var names
         client_id_env = opts.get("client_id", "")
         if "SDP" in client_id_env:
-            client_id = SDP_CLIENT_ID
-            client_secret = SDP_CLIENT_SECRET
-            token_file = SDP_OAUTH_FILE
+            client_id = cfg.sdp_client_id
+            client_secret = cfg.sdp_client_secret
+            token_file = cfg.sdp_oauth_file
         else:
-            client_id = ME_CLIENT_ID
-            client_secret = ME_CLIENT_SECRET
-            token_file = ME_OAUTH_FILE
+            client_id = cfg.me_client_id
+            client_secret = cfg.me_client_secret
+            token_file = cfg.me_oauth_file
         return OAuth2RefreshAuth(
             "https://accounts.zoho.com/oauth/v2/token",
             client_id,
@@ -61,9 +50,9 @@ def build_auth(auth_cfg: Auth) -> Any:
         )
 
     if kind == "ldap":
-        server = AD_SERVER if opts.get("server") == "AD_SERVER" else opts.get("server", "")
-        user = AD_USER if opts.get("user") == "AD_USER" else opts.get("user", "")
-        password = AD_PASSWORD if opts.get("password") == "AD_PASSWORD" else opts.get("password", "")
+        server = cfg.ad_server if opts.get("server") == "AD_SERVER" else opts.get("server", "")
+        user = cfg.ad_user if opts.get("user") == "AD_USER" else opts.get("user", "")
+        password = cfg.ad_password if opts.get("password") == "AD_PASSWORD" else opts.get("password", "")
         return LDAPBindAuth(server, user, password)
 
     if kind == "none":

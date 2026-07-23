@@ -82,7 +82,7 @@ class TestCreateBackup:
         data_dir.mkdir()
         _create_sqlite(data_dir / "src1.sqlite")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         from zentinull.cli.backup import create_backup
 
@@ -103,7 +103,7 @@ class TestCreateBackup:
         data_dir.mkdir()
         db_path = _create_sqlite(data_dir / "src1.sqlite")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         from zentinull.cli.backup import create_backup
 
@@ -122,7 +122,7 @@ class TestCreateBackup:
         mesh_path = data_dir / "mesh.duckdb"
         mesh_path.write_text("duckdb-content")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         from zentinull.cli.backup import create_backup
 
@@ -140,7 +140,7 @@ class TestCreateBackup:
         data_dir.mkdir()
         _create_sqlite(data_dir / "src1.sqlite")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         from zentinull.cli.backup import create_backup
 
@@ -158,7 +158,7 @@ class TestCreateBackup:
         data_dir.mkdir()
         _create_sqlite(data_dir / "src1.sqlite")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         from zentinull.cli.backup import create_backup
 
@@ -177,7 +177,7 @@ class TestCreateBackup:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         from zentinull.cli.backup import create_backup
 
@@ -197,7 +197,7 @@ class TestCreateBackup:
         data_dir.mkdir()
         _create_sqlite(data_dir / "src1.sqlite")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         custom_dir = tmp_path / "custom_backups" / "my_backup"
 
@@ -235,7 +235,7 @@ class TestBackupErrorHandling:
         data_dir.mkdir()
         _create_sqlite(data_dir / "src1.sqlite")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         def failing_connect(*args: object, **kwargs: object) -> object:
             raise sqlite3.Error("simulated WAL failure")
@@ -256,7 +256,7 @@ class TestBackupErrorHandling:
         data_dir.mkdir()
         _create_sqlite(data_dir / "src1.sqlite")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
         monkeypatch.setattr(backup_mod.shutil, "copy2", lambda src, dst: (_ for _ in ()).throw(OSError("copy failed")))
 
         backup_dir = create_backup()
@@ -282,7 +282,7 @@ class TestBackupErrorHandling:
                 raise OSError(msg)
             original_copy2(src, dst)
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
         monkeypatch.setattr(backup_mod.shutil, "copy2", failing_copy2)
 
         backup_dir = create_backup()
@@ -305,7 +305,7 @@ class TestBackupErrorHandling:
         export_file = export_dir / "devices.csv"
         export_file.write_text("device_id,name\n1,machine-1")
 
-        monkeypatch.setattr(backup_mod, "PATHS", _make_paths(tmp_path))
+        monkeypatch.setattr(backup_mod, "get_paths", lambda: _make_paths(tmp_path))
 
         # Make export dir copies fail while non-export copies succeed
         original_copy2 = shutil.copy2

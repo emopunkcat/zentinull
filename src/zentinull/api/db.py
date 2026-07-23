@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import ipaddress
 import json
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
 import duckdb
 
+from ..config import get_paths
 from ..logging_config import get_logger
 from .models import ClusterInfo, DeviceStory, SourceRecord
 
@@ -30,8 +34,9 @@ def _norm_mac(raw: str) -> str:
 class MeshDB:
     """DuckDB-backed device mesh — all queries are SQL, all lookups indexed."""
 
-    def __init__(self, db_path: Path) -> None:
-        self._path = db_path
+    def __init__(self, db_path: Path | None = None) -> None:
+        paths = get_paths()
+        self._path = db_path or paths.mesh_path
 
     def ping(self) -> bool:
         """Validate database connectivity."""
@@ -42,8 +47,8 @@ class MeshDB:
         except Exception:
             return False
 
-    def _conn(self) -> duckdb.DuckDBPyConnection:
-        conn = duckdb.connect(str(self._path), read_only=True)
+    def _conn(self, read_only: bool = True) -> duckdb.DuckDBPyConnection:
+        conn = duckdb.connect(str(self._path), read_only=read_only)
         # Enable faster aggregate queries
         conn.execute("SET threads = 4")
         return conn
@@ -86,6 +91,10 @@ class MeshDB:
             return self._build_story(conn, cluster_id, q)
         finally:
             conn.close()
+
+    def device_story(self, query: str) -> DeviceStory | None:
+        """Convenience alias for ``lookup`` — resolve a query to a full DeviceStory."""
+        return self.lookup(query)
 
     @staticmethod
     def _first_col(row: Any | None) -> str | None:
@@ -217,6 +226,11 @@ class MeshDB:
                     assigned_user=_safe(rd.get("assigned_user")),
                     ip_address=_safe(rd.get("ip_address")),
                     imei=_safe(rd.get("imei")),
+                    mdm_latitude=_safe(rd.get("mdm_latitude")),
+                    mdm_longitude=_safe(rd.get("mdm_longitude")),
+                    mdm_horizontal_accuracy=_safe(rd.get("mdm_horizontal_accuracy")),
+                    mdm_location_address=_safe(rd.get("mdm_location_address")),
+                    mdm_located_time=_safe(rd.get("mdm_located_time")),
                     extra_attributes=extra_attrs,
                 )
             )
@@ -231,6 +245,11 @@ class MeshDB:
             "assigned_user",
             "ip_address",
             "imei",
+            "mdm_latitude",
+            "mdm_longitude",
+            "mdm_horizontal_accuracy",
+            "mdm_location_address",
+            "mdm_located_time",
         ]:
             val = _safe(dev_dict.get(field, ""))
             if val:
@@ -244,8 +263,8 @@ class MeshDB:
             "serial_number",
             "mac_clean",
             "manufacturer",
-            "model",
             "os",
+            "os_family",
             "os_version",
             "asset_tag",
             "assigned_user",
@@ -271,6 +290,60 @@ class MeshDB:
             if existing:
                 consolidated[field_key] = existing
 
+        # ── SOT resolution + drift audit ──────────────────────────────────
+        from ..manifest import load_manifest
+        from ..resolve.sot import sot_resolve
+
+        profile = load_manifest().profiles["device"]
+        meta = {"source", "source_id", "extra_attributes"}
+        data_fields = [f for f in profile.fields if f not in meta and f not in profile.derived]
+
+        # Build per-source record maps for SOT resolution
+        src_records: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            rd = dict(zip(sr_cols, r, strict=True))
+            src = _safe(rd.get("source"))
+            if src not in src_records:
+                src_records[src] = {}
+            for field in data_fields:
+                val = _safe(rd.get(field))
+                if val:
+                    src_records[src][field] = val
+
+        coverage = {k: s.coverage for k, s in load_manifest().systems.items()}
+        sot_result = sot_resolve(profile, src_records, coverage=coverage)
+        device_sot: dict[str, dict[str, str]] = {}
+        for field, (value, source, priority) in sot_result.items():
+            device_sot[field] = {
+                "value": value or "",
+                "source": source or "",
+                "priority": priority,
+            }
+
+        # Build drift audit — per-field cross-source comparison
+        drift_audit: list[dict[str, Any]] = []
+        for field in data_fields:
+            values: dict[str, str] = {}
+            for src in src_records:
+                val = _safe(src_records[src].get(field, ""))
+                if val:
+                    values[src] = val
+            if len(values) >= 2:
+                unique = set(v.lower() for v in values.values())
+                verdict = "MATCH" if len(unique) == 1 else "MISMATCH"
+            elif len(values) == 1:
+                verdict = "SINGLE_SOURCE"
+            else:
+                continue
+            drift_audit.append(
+                {
+                    "field": field,
+                    "label": field.replace("_", " ").title(),
+                    "sources": values,
+                    "verdict": verdict,
+                }
+            )
+
         return DeviceStory(
             query=query,
             cluster_id=cluster_id,
@@ -279,8 +352,24 @@ class MeshDB:
             sources=sources,
             record_count=len(rows),
             consolidated=consolidated,
+            enriched=self._query_enriched(conn, cluster_id),
             records=recs,
+            sot=device_sot,
+            drift_audit=drift_audit,
         )
+
+    def _query_enriched(self, conn: duckdb.DuckDBPyConnection, cluster_id: str) -> dict[str, str]:
+        """Query v_device_enriched for this cluster, return non-empty concepts."""
+        try:
+            row = conn.execute("SELECT * FROM v_device_enriched WHERE cluster_id = ?", [cluster_id]).fetchone()
+        except duckdb.Error:
+            return {}
+        if row is None:
+            return {}
+        cols = [d[0] for d in conn.description]
+        return {
+            c: str(v) for c, v in zip(cols, row, strict=True) if c != "cluster_id" and v is not None and str(v).strip()
+        }
 
     # ── Search ───────────────────────────────────────────────────────────
 
@@ -354,17 +443,13 @@ class MeshDB:
         conn = self._conn()
         try:
             row = conn.execute("SELECT COUNT(*) FROM devices").fetchone()
-            assert row is not None
-            total_devices: int = row[0]
+            total_devices: int = row[0] if row else 0
             row = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()
-            assert row is not None
-            total_records: int = row[0]
+            total_records: int = row[0] if row else 0
             row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count > 1").fetchone()
-            assert row is not None
-            multi: int = row[0]
+            multi: int = row[0] if row else 0
             row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()
-            assert row is not None
-            singles: int = row[0]
+            singles: int = row[0] if row else 0
 
             # Source distribution
             source_counts = dict(
@@ -382,8 +467,7 @@ class MeshDB:
                 ("assigned_user", "assigned_user"),
             ]:
                 row = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {field} != ''").fetchone()
-                assert row is not None
-                n: int = row[0]
+                n: int = row[0] if row else 0
                 coverage[label] = f"{n}/{total_devices} ({100 * n // max(total_devices, 1)}%)"
 
             # Top 10 clusters by source count
@@ -429,11 +513,9 @@ class MeshDB:
         conn = self._conn()
         try:
             row = conn.execute("SELECT COUNT(*) FROM devices").fetchone()
-            assert row is not None
-            total_devices: int = row[0]
+            total_devices: int = row[0] if row else 0
             row = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()
-            assert row is not None
-            total_records: int = row[0]
+            total_records: int = row[0] if row else 0
 
             # Source count distribution
             sc_dist = dict(
@@ -458,8 +540,7 @@ class MeshDB:
             )
 
             row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()
-            assert row is not None
-            singles: int = row[0]
+            singles: int = row[0] if row else 0
 
             return {
                 "total_clusters": total_devices,
@@ -487,14 +568,96 @@ class MeshDB:
             ).fetchall()
 
             row = conn.execute("SELECT COUNT(*) FROM devices WHERE source_count = 1").fetchone()
-            assert row is not None
-            singletons_total: int = row[0]
+            singletons_total: int = row[0] if row else 0
             row = conn.execute("SELECT COUNT(*) FROM devices WHERE device_name = '(unnamed)'").fetchone()
-            assert row is not None
-            no_name_total: int = row[0]
+            no_name_total: int = row[0] if row else 0
             row = conn.execute("SELECT COUNT(*) FROM devices WHERE serial_number = ''").fetchone()
-            assert row is not None
-            no_serial_total: int = row[0]
+            no_serial_total: int = row[0] if row else 0
+            # ── Zombie detection ──────────────────────────────────────────────
+            from ..config import ZOMBIE_STALE_DAYS
+
+            zombies_total: int = 0
+            zombie_rows: list[dict[str, Any]] = []
+            try:
+                zombie_rows_raw = conn.execute(
+                    "SELECT * FROM devices WHERE cluster_id IN ("
+                    "  SELECT cluster_id FROM record_freshness"
+                    "  GROUP BY cluster_id"
+                    "  HAVING MAX(fetched_at) < NOW() - INTERVAL ? DAY"
+                    ")"
+                    " ORDER BY device_name LIMIT 20",
+                    [ZOMBIE_STALE_DAYS],
+                ).fetchall()
+                zombie_cols = [d[0] for d in conn.description]
+                zombie_rows = [
+                    self._row_to_cluster_info(dict(zip(zombie_cols, r, strict=True))).model_dump()
+                    for r in zombie_rows_raw
+                ]
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM devices WHERE cluster_id IN ("
+                    "  SELECT cluster_id FROM record_freshness"
+                    "  GROUP BY cluster_id"
+                    "  HAVING MAX(fetched_at) < NOW() - INTERVAL ? DAY"
+                    ")",
+                    [ZOMBIE_STALE_DAYS],
+                ).fetchone()
+                if row is not None:
+                    zombies_total = row[0]
+            except Exception:
+                log.info({"event": "zombie_query_failed", "detail": "record_freshness may not exist yet"})
+                pass
+
+            # ── Hardware drift (serial conflicts within clusters) ─────────────
+            drift_count: int = 0
+            drift_list: list[dict[str, Any]] = []
+            try:
+                drift_rows = conn.execute("""
+                    SELECT cluster_id, COUNT(DISTINCT serial_number) AS serials,
+                           LIST(DISTINCT serial_number) AS serial_values,
+                           LIST(DISTINCT source) AS sources
+                    FROM source_records
+                    WHERE serial_number != ''
+                    GROUP BY cluster_id
+                    HAVING COUNT(DISTINCT serial_number) > 1
+                    ORDER BY serials DESC
+                    LIMIT 30
+                """).fetchall()
+                drift_list = [
+                    {"cluster_id": r[0], "serial_count": r[1], "serial_values": r[2], "sources": r[3]}
+                    for r in drift_rows
+                ]
+                row = conn.execute("""
+                    SELECT COUNT(*) FROM (
+                        SELECT cluster_id FROM source_records
+                        WHERE serial_number != ''
+                        GROUP BY cluster_id
+                        HAVING COUNT(DISTINCT serial_number) > 1
+                    )
+                """).fetchone()
+                if row is not None:
+                    drift_count = row[0]
+            except Exception:
+                log.info({"event": "drift_query_failed"})
+                pass
+
+            # ── Review annotations from cluster_annotations ────────────────────
+            review_count: int = 0
+            review_list: list[dict[str, Any]] = []
+            try:
+                review_rows = conn.execute(
+                    "SELECT cluster_id, kind, field, values, detail"
+                    " FROM cluster_annotations ORDER BY cluster_id LIMIT 50"
+                ).fetchall()
+                review_list = [
+                    {"cluster_id": r[0], "kind": r[1], "field": r[2], "values": r[3], "detail": r[4]}
+                    for r in review_rows
+                ]
+                row = conn.execute("SELECT COUNT(*) FROM cluster_annotations").fetchone()
+                if row is not None:
+                    review_count = row[0]
+            except Exception:
+                log.info({"event": "review_query_failed", "detail": "cluster_annotations may not exist yet"})
+                pass
 
             return {
                 "singletons": singletons_total,
@@ -509,6 +672,12 @@ class MeshDB:
                 "no_serial_list": [
                     self._row_to_cluster_info(dict(zip(cols, r, strict=True))).model_dump() for r in no_serial
                 ],
+                "zombies": zombies_total,
+                "zombie_list": zombie_rows,
+                "hardware_drift": drift_count,
+                "hardware_drift_list": drift_list,
+                "review_total": review_count,
+                "review_list": review_list,
             }
         except Exception:
             log.error({"event": "anomalies_error"})
@@ -530,8 +699,7 @@ class MeshDB:
             clause = " AND ".join(where)
 
             row = conn.execute(f"SELECT COUNT(*) FROM devices WHERE {clause}", params).fetchone()
-            assert row is not None
-            total: int = row[0]
+            total: int = row[0] if row else 0
             rows = conn.execute(
                 f"SELECT * FROM devices WHERE {clause} ORDER BY source_count DESC, device_name LIMIT ? OFFSET ?",
                 [*params, limit, offset],
@@ -571,7 +739,16 @@ class MeshDB:
                 f"SELECT * FROM metrics WHERE {clause} ORDER BY recorded_at DESC LIMIT ?", params + [limit]
             ).fetchall()
             cols = [d[0] for d in conn.description]
-            return [dict(zip(cols, r, strict=True)) for r in rows]
+            results: list[dict[str, Any]] = []
+            for r in rows:
+                d = dict(zip(cols, r, strict=True))
+                # Convert datetime → ISO string for Pydantic str fields
+                if d.get("recorded_at"):
+                    d["recorded_at"] = str(d["recorded_at"])
+                if d.get("ingested_at"):
+                    d["ingested_at"] = str(d["ingested_at"])
+                results.append(d)
+            return results
         finally:
             conn.close()
 
@@ -636,7 +813,15 @@ class MeshDB:
                 [cluster_id, limit],
             ).fetchall()
             cols = [d[0] for d in conn.description]
-            return [dict(zip(cols, r, strict=True)) for r in rows]
+            results: list[dict[str, Any]] = []
+            for r in rows:
+                d = dict(zip(cols, r, strict=True))
+                if d.get("recorded_at"):
+                    d["recorded_at"] = str(d["recorded_at"])
+                if d.get("ingested_at"):
+                    d["ingested_at"] = str(d["ingested_at"])
+                results.append(d)
+            return results
         finally:
             conn.close()
 
@@ -650,9 +835,96 @@ class MeshDB:
                 [cluster_id],
             ).fetchall()
             cols = [d[0] for d in conn.description]
-            return [dict(zip(cols, r, strict=True)) for r in rows]
+            results: list[dict[str, Any]] = []
+            for r in rows:
+                d = dict(zip(cols, r, strict=True))
+                # payload is stored as JSON string in DuckDB; parse to dict for Pydantic
+                payload = d.get("payload")
+                if isinstance(payload, str):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        d["payload"] = json.loads(payload)
+                if not isinstance(d.get("payload"), dict):
+                    d["payload"] = {}
+                # linked_at datetime → ISO string
+                if d.get("linked_at"):
+                    d["linked_at"] = str(d["linked_at"])
+                results.append(d)
+            return results
         finally:
             conn.close()
+
+    def device_vlans(self, cluster_id: str) -> list[dict[str, Any]]:
+        """Return SharePoint VLANs whose IP range contains any of the cluster's IPs.
+
+        VLANs are stored in sp.sqlite as CONTEXT; this is a runtime CIDR join.
+        """
+        paths = get_paths()
+        conn = self._conn()
+        try:
+            ip_rows = conn.execute(
+                "SELECT DISTINCT ip_address FROM source_records WHERE cluster_id = ? AND ip_address != ''",
+                [cluster_id],
+            ).fetchall()
+        finally:
+            conn.close()
+
+        device_ips: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+        for (ip,) in ip_rows:
+            with contextlib.suppress(ValueError):
+                device_ips.add(ipaddress.ip_address(ip))
+
+        if not device_ips:
+            return []
+
+        sp_db = paths.data_dir / "sp.sqlite"
+        if not sp_db.exists():
+            return []
+
+        results: list[dict[str, Any]] = []
+        sconn = sqlite3.connect(str(sp_db))
+        sconn.row_factory = sqlite3.Row
+        try:
+            rows = sconn.execute("SELECT raw_json FROM sp_vlans").fetchall()
+            for r in rows:
+                try:
+                    fields = json.loads(r["raw_json"]).get("fields", {})
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                network_id = fields.get("NetworkID", "")
+                starting_ip = fields.get("StartingIP", "")
+                ending_ip = fields.get("EndingIP", "")
+                if not network_id or not starting_ip or not ending_ip:
+                    continue
+                try:
+                    vlan_net = ipaddress.ip_network(network_id, strict=False)
+                    start = ipaddress.ip_address(starting_ip)
+                    end = ipaddress.ip_address(ending_ip)
+                except ValueError:
+                    continue
+                # A VLAN matches if any device IP is in the network and between
+                # start/end. Compare as ints after a version guard — mixing v4/v6
+                # raises TypeError on ordered comparison.
+                for dev_ip in device_ips:
+                    if not (dev_ip.version == vlan_net.version == start.version == end.version):
+                        continue
+                    in_network = int(vlan_net.network_address) <= int(dev_ip) <= int(vlan_net.broadcast_address)
+                    if in_network and int(start) <= int(dev_ip) <= int(end):
+                        results.append(
+                            {
+                                "id": fields.get("ID"),
+                                "vlan_name": fields.get("VlanName"),
+                                "network_id": network_id,
+                                "network": fields.get("Network", ""),
+                                "starting_ip": starting_ip,
+                                "ending_ip": ending_ip,
+                                "description": fields.get("Description", ""),
+                            }
+                        )
+                        break
+        finally:
+            sconn.close()
+
+        return results
 
     def device_stats(self, cluster_id: str) -> dict[str, Any]:
         """Current state: latest metric values + event counts."""
@@ -696,6 +968,205 @@ class MeshDB:
         finally:
             conn.close()
 
+    def device_trace(self, cluster_id: str) -> dict[str, Any]:
+        """Full mesh trace from a cluster — like sentinull's identity trace.
+
+        Returns:
+            - The device itself (consolidated + sources)
+            - Other devices sharing the same assigned_user
+            - All attachments (account info, device notes, purchases, employees)
+            - VLAN membership
+            - Linked devices discovered via attachments (e.g., same purchase, same account)
+        """
+        conn = self._conn()
+        try:
+            # 1. Get the anchor device
+            dev = conn.execute("SELECT * FROM devices WHERE cluster_id = ?", [cluster_id]).fetchone()
+            if not dev:
+                return {}
+            cols = [d[0] for d in conn.description]
+            device = dict(zip(cols, dev, strict=True))
+
+            # 2. Get source records for this cluster
+            src_rows = conn.execute(
+                "SELECT source, source_id, name, name_clean, serial_number, mac_address, "
+                "mac_clean, manufacturer, model, os, os_version, asset_tag, assigned_user, "
+                "ip_address, imei, extra_attributes "
+                "FROM source_records WHERE cluster_id = ?",
+                [cluster_id],
+            ).fetchall()
+            src_cols = [d[0] for d in conn.description]
+            sources = [dict(zip(src_cols, r, strict=True)) for r in src_rows]
+        finally:
+            conn.close()
+
+        # 3. Find other devices sharing the same assigned_user
+        assigned_user = device.get("assigned_user", "")
+        linked_by_user: list[dict[str, Any]] = []
+        if assigned_user and assigned_user not in ("", "null", "None"):
+            conn = self._conn()
+            try:
+                user_rows = conn.execute(
+                    "SELECT cluster_id, device_name, source_count, sources, serial_number, "
+                    "mac_address, manufacturer, model, os, ip_address "
+                    "FROM devices WHERE assigned_user = ? AND cluster_id != ? "
+                    "ORDER BY source_count DESC",
+                    [assigned_user, cluster_id],
+                ).fetchall()
+                ucols = [d[0] for d in conn.description]
+                for r in user_rows:
+                    rd = dict(zip(ucols, r, strict=True))
+                    rd["link_type"] = "shared_user"
+                    rd["via"] = assigned_user
+                    linked_by_user.append(rd)
+            finally:
+                conn.close()
+
+        # 4. Get attachments for this cluster
+        attachments = self.device_attachments(cluster_id)
+
+        # 5. Find linked devices via shared attachment (e.g., same purchase order, same account)
+        linked_by_attachment: list[dict[str, Any]] = []
+        attachment_values = {a["value"] for a in attachments if a.get("value")}
+        if attachment_values:
+            conn = self._conn()
+            try:
+                placeholders = ", ".join(["?"] * len(attachment_values))
+                link_rows = conn.execute(
+                    f"SELECT DISTINCT a2.cluster_id, d.device_name, d.source_count, d.sources, "
+                    f"d.serial_number, d.mac_address, d.manufacturer, d.model, "
+                    f"a2.feed_key, a2.field, a2.value "
+                    f"FROM attachments a2 JOIN devices d ON d.cluster_id = a2.cluster_id "
+                    f"WHERE a2.value IN ({placeholders}) AND a2.cluster_id != ? "
+                    f"LIMIT 20",
+                    [*list(attachment_values), cluster_id],
+                ).fetchall()
+                lcols = [d[0] for d in conn.description]
+                for r in link_rows:
+                    rd = dict(zip(lcols, r, strict=True))
+                    rd["link_type"] = f"shared_{rd.get('feed_key', 'attachment')}"
+                    rd["via"] = rd.get("value", "")
+                    linked_by_attachment.append(rd)
+            finally:
+                conn.close()
+
+        # 6. VLAN membership
+        vlans = self.device_vlans(cluster_id)
+
+        # 7. Build node/edge graph
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+
+        # Anchor device node
+        nodes.append(
+            {
+                "id": cluster_id,
+                "type": "device",
+                "label": device.get("device_name", cluster_id),
+                "data": {
+                    "serial_number": device.get("serial_number", ""),
+                    "mac_address": device.get("mac_address", ""),
+                    "manufacturer": device.get("manufacturer", ""),
+                    "model": device.get("model", ""),
+                    "assigned_user": assigned_user,
+                    "sources": device.get("sources", []),
+                    "source_count": device.get("source_count", 0),
+                },
+            }
+        )
+
+        # Linked-by-user nodes + edges
+        for ld in linked_by_user:
+            cid = ld.get("cluster_id", "")
+            nodes.append(
+                {
+                    "id": cid,
+                    "type": "device",
+                    "label": ld.get("device_name", cid),
+                    "data": {k: v for k, v in ld.items() if k not in ("link_type", "via")},
+                }
+            )
+            edges.append(
+                {
+                    "source": cluster_id,
+                    "target": cid,
+                    "type": "shared_user",
+                    "label": f"user: {assigned_user}",
+                }
+            )
+
+        # Linked-by-attachment nodes + edges
+        for ld in linked_by_attachment:
+            cid = ld.get("cluster_id", "")
+            if not any(n["id"] == cid for n in nodes):
+                nodes.append(
+                    {
+                        "id": cid,
+                        "type": "device",
+                        "label": ld.get("device_name", cid),
+                        "data": {
+                            k: v for k, v in ld.items() if k not in ("link_type", "via", "feed_key", "field", "value")
+                        },
+                    }
+                )
+            edges.append(
+                {
+                    "source": cluster_id,
+                    "target": cid,
+                    "type": ld.get("link_type", "shared_attachment"),
+                    "label": f"{ld.get('feed_key', '')}: {ld.get('via', '')}",
+                }
+            )
+
+        # User node
+        if assigned_user and assigned_user not in ("", "null", "None"):
+            nodes.append(
+                {
+                    "id": f"user:{assigned_user}",
+                    "type": "user",
+                    "label": assigned_user,
+                }
+            )
+            edges.append(
+                {
+                    "source": cluster_id,
+                    "target": f"user:{assigned_user}",
+                    "type": "assigned_to",
+                }
+            )
+
+        # VLAN nodes
+        for vlan in vlans:
+            vid = f"vlan:{vlan.get('vlan_name', '')}"
+            nodes.append(
+                {
+                    "id": vid,
+                    "type": "vlan",
+                    "label": vlan.get("vlan_name", ""),
+                    "data": vlan,
+                }
+            )
+            edges.append(
+                {
+                    "source": cluster_id,
+                    "target": vid,
+                    "type": "on_vlan",
+                }
+            )
+
+        return {
+            "query_cluster_id": cluster_id,
+            "device": device,
+            "sources": sources,
+            "attachments": attachments,
+            "linked_devices": linked_by_user + linked_by_attachment,
+            "vlans": vlans,
+            "graph": {
+                "nodes": nodes,
+                "edges": edges,
+            },
+        }
+
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _row_to_cluster_info(self, row: dict[str, Any]) -> ClusterInfo:
@@ -721,5 +1192,30 @@ class MeshDB:
             assigned_user=_safe(row.get("assigned_user")),
             ip_address=_safe(row.get("ip_address")),
             imei=_safe(row.get("imei")),
+            mdm_latitude=_safe(row.get("mdm_latitude")),
+            mdm_longitude=_safe(row.get("mdm_longitude")),
+            mdm_horizontal_accuracy=_safe(row.get("mdm_horizontal_accuracy")),
+            mdm_location_address=_safe(row.get("mdm_location_address")),
+            mdm_located_time=_safe(row.get("mdm_located_time")),
             record_count=int(_safe(row.get("record_count", "0")) or 0),
         )
+
+    def unmapped_fields(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Top unmapped raw fields per source, from extra_attributes JSON."""
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT source, je.key AS field, COUNT(*) AS occurrences
+                FROM source_records,
+                     json_each(CASE WHEN extra_attributes IN ('', '{}')
+                                    THEN '{}' ELSE extra_attributes END) je
+                GROUP BY source, je.key
+                ORDER BY occurrences DESC
+                LIMIT ?
+            """,
+                [limit],
+            ).fetchall()
+            return [{"source": r[0], "field": r[1], "occurrences": r[2]} for r in rows]
+        finally:
+            conn.close()

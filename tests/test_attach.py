@@ -12,6 +12,7 @@ Key invariants:
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -37,10 +38,12 @@ def _seed_mesh(mesh_path: str) -> None:
             CREATE TABLE source_records (
                 cluster_id TEXT,
                 source TEXT,
+                source_id TEXT,
                 name_clean TEXT,
                 mac_clean TEXT,
                 serial_number TEXT,
                 asset_tag TEXT,
+                assigned_user TEXT DEFAULT '',
                 manufacturer TEXT DEFAULT '',
                 os TEXT DEFAULT ''
             )
@@ -49,9 +52,9 @@ def _seed_mesh(mesh_path: str) -> None:
         conn.execute(
             """
             INSERT INTO source_records VALUES
-            ('cid_a', 'sp', 'mbipad-072', 'aabbccddeeff', 'SN001', 'TAG001', 'Apple', 'ios'),
-            ('cid_b', 'fg', 'ws28', '112233445566', 'SN002', 'TAG002', 'Dell', 'Windows 10'),
-            ('cid_c', 'zbx', 'sr01', 'aabbcc112233', 'SN003', 'TAG003', 'HP', 'Linux')
+            ('cid_a', 'sp', 'sp_1', 'mbipad-072', 'aabbccddeeff', 'SN001', 'TAG001', 'jdoe@example.com', 'Apple', 'ios'),
+            ('cid_b', 'fg', 'fg_1', 'ws28', '112233445566', 'SN002', 'TAG002', 'jsmith@example.com', 'Dell', 'Windows 10'),
+            ('cid_c', 'zbx', 'zbx_1', 'sr01', 'aabbcc112233', 'SN003', 'TAG003', '', 'HP', 'Linux')
             """
         )
     finally:
@@ -133,6 +136,22 @@ def test_normalized_strategy_no_match() -> None:
         results = resolve_normalized(link, raw_record, keyspace)
 
         assert results == []
+
+
+def test_exact_strategy_match_assigned_user() -> None:
+    """build_keyspace includes assigned_user; resolve_exact matches email."""
+    with tempfile.TemporaryDirectory() as tmp:
+        mesh_path = str(Path(tmp) / "mesh.duckdb")
+        _seed_mesh(mesh_path)
+        keyspace = build_keyspace(mesh_path)
+
+        link = _make_link(field="email", strategy="exact", on="assigned_user")
+        raw_record = {"email": "jdoe@example.com"}
+        results = resolve_exact(link, raw_record, keyspace)
+
+        assert len(results) == 1
+        assert results[0].cluster_id == "cid_a"
+        assert results[0].confidence == 1.0
 
 
 def test_ambiguous_token_multi_false_returns_one() -> None:
@@ -254,3 +273,74 @@ def test_resolve_feed_attachments_extracts_and_resolves() -> None:
             assert r["source_id"] == "req_001"
             assert "confidence" in r
             assert "payload" in r
+
+
+def test_resolve_feed_attachments_sharepoint_lookup_by_id() -> None:
+    """sp_devicenotes LookupToDevicesLookupId -> sp_devices source_id exact match."""
+    tmp = tempfile.mkdtemp()
+    try:
+        mesh_path = str(Path(tmp) / "mesh.duckdb")
+        conn = duckdb.connect(mesh_path)
+        conn.execute(
+            """
+            CREATE TABLE source_records (
+                cluster_id TEXT, source TEXT, source_id TEXT,
+                name_clean TEXT, mac_clean TEXT, serial_number TEXT,
+                asset_tag TEXT, assigned_user TEXT DEFAULT '',
+                manufacturer TEXT DEFAULT '', os TEXT DEFAULT ''
+            )
+            """
+        )
+        # sp_devices record with source_id matching the SharePoint item ID
+        conn.execute(
+            "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("cid_x", "sp", "42", "ws28", "", "", "", "", "", ""),
+        )
+        conn.close()
+
+        sqlite_path = str(Path(tmp) / "sp.sqlite")
+        with sqlite3.connect(sqlite_path) as sconn:
+            sconn.execute(
+                """
+                CREATE TABLE sp_devicenotes (
+                    id INTEGER PRIMARY KEY,
+                    source_id TEXT,
+                    raw_json TEXT,
+                    raw_hash TEXT,
+                    remote_updated_at TEXT,
+                    fetched_at TEXT
+                )
+                """
+            )
+            sconn.execute(
+                "INSERT INTO sp_devicenotes (id, source_id, raw_json, raw_hash) VALUES (?, ?, ?, ?)",
+                (1, "note_001", json.dumps({"fields": {"LookupToDevicesLookupId": "42"}}), "hash1"),
+            )
+
+        feed = Feed(
+            system="sp",
+            endpoint={},
+            role=Role.ATTACHMENT,
+            store="sp_devicenotes",
+            id_path="id",
+            links=(
+                Link(
+                    field="fields.LookupToDevicesLookupId",
+                    to="device",
+                    on="source_id",
+                    strategy="exact",
+                    scope=("sp_devices",),
+                ),
+            ),
+        )
+
+        results = resolve_feed_attachments(feed, "sp_devicenotes", mesh_path, sqlite_path)
+        assert len(results) == 1
+        assert results[0]["cluster_id"] == "cid_x"
+        assert results[0]["source_id"] == "note_001"
+        assert results[0]["field"] == "fields.LookupToDevicesLookupId"
+    finally:
+        import gc
+
+        gc.collect()
+        shutil.rmtree(tmp, ignore_errors=True)

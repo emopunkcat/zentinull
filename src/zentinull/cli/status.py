@@ -14,7 +14,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from ..config import PATHS
+from ..config import get_paths
 
 if sys.platform != "win32":
     import fcntl  # POSIX advisory file locking (absent on Windows)
@@ -37,7 +37,8 @@ def _flock(fd: int, *, exclusive: bool) -> None:
 def _read() -> dict[str, Any]:
     """Read the status file with shared lock, returning default empty structure on error."""
     try:
-        fd = os.open(str(PATHS.status_file), os.O_RDONLY | _O_BINARY)
+        paths = get_paths()
+        fd = os.open(str(paths.status_file), os.O_RDONLY | _O_BINARY)
     except FileNotFoundError:
         return {"stages": {}, "freshness": {}}
     try:
@@ -52,8 +53,9 @@ def _read() -> dict[str, Any]:
 @contextlib.contextmanager
 def _lock_and_update() -> Any:
     """Acquire exclusive lock on the status file, read, yield for update, and write back."""
-    PATHS.status_file.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(PATHS.status_file), os.O_CREAT | os.O_RDWR | _O_BINARY)
+    paths = get_paths()
+    paths.status_file.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(paths.status_file), os.O_CREAT | os.O_RDWR | _O_BINARY)
     try:
         _flock(fd, exclusive=True)
         os.lseek(fd, 0, os.SEEK_SET)

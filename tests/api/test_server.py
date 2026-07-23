@@ -28,7 +28,7 @@ class TestLifespan:
             benchmarks_dir=tmp_path / ".benchmarks",
         )
         with (
-            patch.object(srv, "PATHS", _paths),
+            patch.object(srv, "get_paths", return_value=_paths),
             TestClient(srv.app) as client,
         ):
             assert client.app.state.db is None
@@ -58,7 +58,7 @@ class TestLifespan:
             splink_output_dir=tmp_path / "export" / "splink_output",
             benchmarks_dir=tmp_path / ".benchmarks",
         )
-        with patch.object(srv, "PATHS", _paths), TestClient(srv.app) as client:
+        with patch.object(srv, "get_paths", return_value=_paths), TestClient(srv.app) as client:
             assert client.app.state.db is not None
             assert hasattr(client.app.state.db, "lookup")
 

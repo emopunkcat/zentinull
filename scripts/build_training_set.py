@@ -5,15 +5,16 @@ from collections import defaultdict
 
 import pandas as pd
 
-from zentinull.config import PATHS
+from zentinull.config import get_paths
 from zentinull.logging_config import get_logger, setup
 
 random.seed(42)
 setup()
 log = get_logger("training")
+paths = get_paths()
 
-CSV = str(PATHS.csv_dir / "devices.csv")
-OUT = str(PATHS.splink_output_dir / "training_labels.csv")
+CSV = str(paths.csv_dir / "devices.csv")
+OUT = str(paths.splink_output_dir / "training_labels.csv")
 
 df = pd.read_csv(CSV)
 df.columns = [c.strip() for c in df.columns]

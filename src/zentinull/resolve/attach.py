@@ -19,6 +19,8 @@ from typing import Any
 
 import duckdb
 
+from ..export_for_splink import _FEED_SOURCE_MAP
+from ..ingestors.base import validate_identifier
 from ..logging_config import get_logger
 from ..manifest.types import Feed, Link
 
@@ -67,18 +69,25 @@ class AttachResult:
 
 
 def build_keyspace(db_path: str, link_scope: tuple[str, ...] | None = None) -> dict[str, str]:
-    """Build token → cluster_id lookup from source_records in the mesh DB."""
+    """Build token → cluster_id lookup from source_records in the mesh DB.
+
+    ``link_scope`` is a tuple of feed keys; they are translated to the source
+    column values used in ``source_records`` (e.g. ``sp_devices`` -> ``sp``).
+    """
     conn = duckdb.connect(db_path, read_only=True)
     try:
         rows = conn.execute(
-            "SELECT cluster_id, source, name_clean, mac_clean, serial_number, asset_tag FROM source_records"
+            "SELECT cluster_id, source, source_id, name_clean, mac_clean, serial_number, asset_tag, assigned_user FROM source_records"
         ).fetchall()
         keyspace: dict[str, str] = {}
+        scope_sources: set[str] | None = None
+        if link_scope:
+            scope_sources = {_FEED_SOURCE_MAP.get(feed_key, feed_key) for feed_key in link_scope}
         for row in rows:
-            cid, source, name, mac, serial, asset = row
-            if link_scope and source not in link_scope:
+            cid, source, source_id, name, mac, serial, asset, user = row
+            if scope_sources is not None and source not in scope_sources:
                 continue
-            for val in [name, mac, serial, asset]:
+            for val in [source_id, name, mac, serial, asset, user]:
                 if val and str(val).strip():
                     keyspace[str(val).lower().strip()] = cid
         return keyspace
@@ -230,11 +239,12 @@ def resolve_feed_attachments(
     conn = sqlite3.connect(sqlite_db_path)
     conn.row_factory = sqlite3.Row
     try:
+        store_table = validate_identifier(feed.store)
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        if feed.store not in tables:
-            log.warning({"event": "table_not_found", "feed": feed_key, "table": feed.store})
+        if store_table not in tables:
+            log.warning({"event": "table_not_found", "feed": feed_key, "table": store_table})
             return results
-        rows = conn.execute(f"SELECT source_id, raw_json FROM {feed.store}").fetchall()
+        rows = conn.execute(f"SELECT source_id, raw_json FROM {store_table}").fetchall()
     except Exception as e:
         log.error({"event": "read_failed", "feed": feed_key, "error": str(e)})
         return results

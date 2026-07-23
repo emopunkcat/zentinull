@@ -27,11 +27,9 @@ import sys
 import time
 from typing import Any
 
-from .config import _load_dotenv
 from .logging_config import get_logger, setup
 from .manifest import load_manifest
 
-_load_dotenv()
 setup(level="INFO")
 
 log = get_logger("worker")
@@ -96,15 +94,17 @@ async def _run_full_pipeline() -> None:
     await loop.run_in_executor(None, _do_pipeline)
 
 
-async def loop() -> None:
+async def loop(*, register_signals: bool = True) -> None:
     state = WorkerState()
 
-    def _handle_stop(signum: int, _frame: Any) -> None:
-        log.info({"event": "shutdown_signal", "signal": signum})
-        state.should_stop = True
+    if register_signals:
 
-    signal.signal(signal.SIGTERM, _handle_stop)
-    signal.signal(signal.SIGINT, _handle_stop)
+        def _handle_stop(signum: int, _frame: Any) -> None:
+            log.info({"event": "shutdown_signal", "signal": signum})
+            state.should_stop = True
+
+        signal.signal(signal.SIGTERM, _handle_stop)
+        signal.signal(signal.SIGINT, _handle_stop)
 
     log.info(
         {

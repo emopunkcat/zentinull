@@ -604,7 +604,7 @@ class TestDefaultManifest:
         manifest = load_manifest("default")
         assert manifest.project == "default"
         assert len(manifest.systems) == 6
-        assert len(manifest.feeds) == 23
+        assert len(manifest.feeds) == 24
         assert len(manifest.profiles) == 1
         assert "device" in manifest.profiles
 
@@ -622,9 +622,9 @@ class TestDefaultManifest:
         context_feeds = get_feed_keys(manifest, Role.CONTEXT)
 
         assert len(anchor_feeds) == 8
-        assert len(attachment_feeds) == 2
-        assert len(context_feeds) == 13
-        assert len(anchor_feeds) + len(attachment_feeds) + len(context_feeds) == 23
+        assert len(attachment_feeds) == 7
+        assert len(context_feeds) == 9
+        assert len(anchor_feeds) + len(attachment_feeds) + len(context_feeds) == 24
 
     def test_default_manifest_device_profile(self):
         """Default manifest device profile has expected structure."""
@@ -632,13 +632,15 @@ class TestDefaultManifest:
         profile = manifest.profiles["device"]
 
         assert profile.name == "device"
-        assert len(profile.fields) == 16
+        assert len(profile.fields) == 23
         assert "source" in profile.fields
         assert "source_id" in profile.fields
         assert "name" in profile.fields
         assert "name_clean" in profile.derived
         assert "mac_clean" in profile.derived
-        assert len(profile.comparisons) == 6
+        assert len(profile.comparisons) == 7
+        assert "name_clean" in profile.blocking
+        assert "ip_address" in [c.column for c in profile.comparisons]
         assert profile.predict_threshold < 0
         assert profile.cluster_threshold < 0
 
@@ -668,3 +670,135 @@ class TestDefaultManifest:
         assert link.on == "name"
         assert link.strategy == "extract_fuzzy"
         assert link.multi is True
+
+    def test_default_manifest_sp_devicenotes_link(self):
+        """sp_devicenotes links via SharePoint lookup ID."""
+        manifest = load_manifest("default")
+        feed = manifest.feeds["sp_devicenotes"]
+
+        assert feed.role == Role.ATTACHMENT
+        assert len(feed.links) == 1
+        link = feed.links[0]
+        assert link.field == "fields.LookupToDevicesLookupId"
+        assert link.on == "source_id"
+        assert link.strategy == "exact"
+        assert link.scope == ("sp_devices",)
+
+    def test_default_manifest_sp_componentpurchases_link(self):
+        """sp_componentpurchases links via SharePoint lookup ID."""
+        manifest = load_manifest("default")
+        feed = manifest.feeds["sp_componentpurchases"]
+
+        assert feed.role == Role.ATTACHMENT
+        assert len(feed.links) == 1
+        link = feed.links[0]
+        assert link.field == "fields.LookupToDevicesLookupId"
+        assert link.on == "source_id"
+        assert link.strategy == "exact"
+        assert link.scope == ("sp_devices",)
+
+    def test_default_manifest_sp_accountinfo_link(self):
+        """sp_accountinfo links via device name and employee name."""
+        manifest = load_manifest("default")
+        feed = manifest.feeds["sp_accountinfo"]
+
+        assert feed.role == Role.ATTACHMENT
+        assert len(feed.links) == 2
+        # Link 1: DeviceString → name_clean (device name match)
+        link = feed.links[0]
+        assert link.field == "fields.DeviceString"
+        assert link.on == "name_clean"
+        assert link.strategy == "exact"
+        assert link.scope == ("sp_devices",)
+        # Link 2: EmployeeString → assigned_user (employee name match)
+        link2 = feed.links[1]
+        assert link2.field == "fields.EmployeeString"
+        assert link2.on == "assigned_user"
+        assert link2.strategy == "exact"
+
+    def test_default_manifest_sp_employees_link(self):
+        """sp_employees links via assigned user email and name."""
+        manifest = load_manifest("default")
+        feed = manifest.feeds["sp_employees"]
+
+        assert feed.role == Role.ATTACHMENT
+        assert len(feed.links) == 3
+        # Link 1: email-based (ME_MDM stores email as assigned_user)
+        link = feed.links[0]
+        assert link.field == "fields.BusEmailAddress"
+        assert link.on == "assigned_user"
+        assert link.strategy == "exact"
+        assert "sp_devices" in link.scope
+        # Link 2: name-based (SP/FG/AD stores full name as assigned_user)
+        link2 = feed.links[1]
+        assert link2.field == "fields.ReadName"
+        assert link2.on == "assigned_user"
+        assert link2.strategy == "exact"
+        # Link 3: username-based (FG stores MLUsername as assigned_user)
+        link3 = feed.links[2]
+        assert link3.field == "fields.MLUsername"
+        assert link3.on == "assigned_user"
+        assert link3.strategy == "exact"
+
+    def test_default_manifest_sp_employeedocs_link(self):
+        """sp_employeedocs links via normalized URL→employee name → assigned_user."""
+        manifest = load_manifest("default")
+        feed = manifest.feeds["sp_employeedocs"]
+
+        assert feed.system == "sp"
+        assert feed.role == Role.ATTACHMENT
+        assert feed.id_path == "fields.ID"
+        assert len(feed.links) == 1
+        link = feed.links[0]
+        assert link.field == "webUrl"
+        assert link.on == "assigned_user"
+        assert link.strategy == "normalized"
+        assert link.transform == "employee_name_from_url"
+        assert link.multi is True
+        # Must include all anchor feeds that store assigned_user so a doc
+        # links to the same clusters an employee would.
+        assert "sp_devices" in link.scope
+        assert "me_ec" in link.scope
+        assert "me_mdm" in link.scope
+        assert "fg_clients" in link.scope
+        assert "ad_computers" in link.scope
+
+
+class TestEmployeeNameFromUrlTransform:
+    """Verify the employee_name_from_url transform used by sp_employeedocs."""
+
+    def test_parses_basic_employee_name(self):
+        from zentinull.manifest.transforms import _employee_name_from_url
+
+        assert (
+            _employee_name_from_url(
+                "https://moonliteconstruction.sharepoint.com/sites/MLIT-DEV/Agreements/Rick%20Ahmed__10/221318F.001b_rahmed_MD-Issuance.pdf"
+            )
+            == "Rick Ahmed"
+        )
+
+    def test_parses_three_word_name(self):
+        from zentinull.manifest.transforms import _employee_name_from_url
+
+        assert (
+            _employee_name_from_url(
+                "https://moonliteconstruction.sharepoint.com/sites/MLIT-DEV/Agreements/Miguel%20Medina%20Aguirre__28/221328P_mmedina_SecPol_encrypted.pdf"
+            )
+            == "Miguel Medina Aguirre"
+        )
+
+    def test_unrelated_url_returns_empty(self):
+        from zentinull.manifest.transforms import _employee_name_from_url
+
+        assert _employee_name_from_url("https://example.com/some/other/path/foo.pdf") == ""
+
+    def test_empty_input_returns_empty(self):
+        from zentinull.manifest.transforms import _employee_name_from_url
+
+        assert _employee_name_from_url("") == ""
+
+    def test_registered_in_transform_registry(self):
+        from zentinull.manifest.transforms import REGISTRY
+
+        assert "employee_name_from_url" in REGISTRY
+        assert callable(REGISTRY["employee_name_from_url"])

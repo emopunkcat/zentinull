@@ -12,10 +12,11 @@ Endpoint resolution is performed here before calling the strategy:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 from typing import Any
 
-from .. import config as _config
+from ..config import get_config
 from ..ingestors import base
 from ..logging_config import get_logger
 from ..manifest import Manifest, get_system_feeds
@@ -34,12 +35,13 @@ def _resolve_endpoint(endpoint: Mapping[str, Any]) -> dict[str, Any]:
 
     if "base" in resolved:
         base_conf = resolved.pop("base")
-        base_url = str(getattr(_config, base_conf)).rstrip("/")
+        base_url = str(getattr(get_config(), base_conf.lower())).rstrip("/")
         path = resolved.pop("path", "")
         resolved["url"] = base_url + path
+        resolved["resolved_base"] = base_url
 
     if "search_base_conf" in resolved:
-        resolved["search_base"] = getattr(_config, resolved.pop("search_base_conf"))
+        resolved["search_base"] = getattr(get_config(), resolved.pop("search_base_conf").lower())
 
     return resolved
 
@@ -99,10 +101,19 @@ def run_feed(
 
     # Write to raw store
     conn = base.db(feed.system)
+    _batch_id = uuid.uuid4().hex[:12]
     try:
         if incremental:
             base.ensure_raw_store(conn, feed.store)
-            written = base.upsert_raw_rows(conn, feed.store, rows, feed.id_path, feed.updated_path)
+            written = base.upsert_raw_rows(
+                conn,
+                feed.store,
+                rows,
+                feed.id_path,
+                feed.updated_path,
+                source=feed_key,
+                batch_id=_batch_id,
+            )
         else:
             base.create_raw_store(conn, feed.store)
             written = base.insert_raw_rows(conn, feed.store, rows, feed.id_path, feed.updated_path)
@@ -168,6 +179,7 @@ def run_system(
     results: dict[str, int] = {}
     conn = base.db(system_key)
     try:
+        _batch_id = uuid.uuid4().hex[:12]
         for feed_key in feeds_to_run:
             feed = manifest.feeds[feed_key]
             endpoint = _resolve_endpoint(feed.endpoint)
@@ -197,7 +209,15 @@ def run_system(
             try:
                 if incremental:
                     base.ensure_raw_store(conn, feed.store)
-                    written = base.upsert_raw_rows(conn, feed.store, rows, feed.id_path, feed.updated_path)
+                    written = base.upsert_raw_rows(
+                        conn,
+                        feed.store,
+                        rows,
+                        feed.id_path,
+                        feed.updated_path,
+                        source=feed_key,
+                        batch_id=_batch_id,
+                    )
                 else:
                     base.create_raw_store(conn, feed.store)
                     written = base.insert_raw_rows(conn, feed.store, rows, feed.id_path, feed.updated_path)

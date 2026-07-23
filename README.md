@@ -40,8 +40,8 @@ cp .env.example .env
 python scripts/seed_demo_data.py
 
 # Or run the full pipeline against real sources
-python scripts/run_ingest.py
-python scripts/pipeline.py
+python serve.py ingest
+python serve.py pipeline
 
 # API server
 python serve.py start
@@ -80,7 +80,6 @@ configures Python, Ruff, Mypy, and pre-commit automatically.
 
 ```
 src/zentinull/           # Library code
-├── pipeline.py         # Original pipeline orchestrator (subprocess)
 ├── logging_config.py   # Structured logging (key=value or JSON)
 ├── cli/                # Modern in-process pipeline + tools
 │   ├── pipeline.py    # In-process run + status tracking + atomic load
@@ -99,9 +98,9 @@ src/zentinull/           # Library code
 │   └── servicedeskplus.py  # ServiceDesk Plus assets
 ├── api/                # FastAPI query layer
 │   ├── server.py      # FastAPI app + CORS + lifespan
-│   ├── router.py      # 12 REST endpoints
+│   ├── router.py      # 19 REST endpoints
 │   ├── db.py          # DuckDB query layer (MeshDB)
-│   ├── models.py      # 6 frozen Pydantic models
+│   ├── models.py      # 21 frozen Pydantic models
 │   └── schema.py      # Shared DuckDB DDL
 └── export_for_splink.py  # Unified CSV export + field normalization
 scripts/                # Runnable entry points
@@ -138,7 +137,7 @@ are hardcoded.
 
 | Gate | Status |
 |---|---|
-| Tests | 448+ tests, 92% coverage |
+| Tests | 690+ tests, 92% coverage |
 | Lint | Ruff (E, F, I, N, W, UP, B, SIM, ARG) |
 | Types | Mypy strict mode |
 | Benchmarks | Historical tracking with regression gates |

@@ -23,7 +23,7 @@ def test_db_creates_file(tmp_path, monkeypatch):
         splink_output_dir=tmp_path / "export" / "splink_output",
         benchmarks_dir=tmp_path / ".benchmarks",
     )
-    monkeypatch.setattr(base_mod, "PATHS", _paths)
+    monkeypatch.setattr(base_mod, "get_paths", lambda: _paths)
     conn = db("test_source")
 
     assert isinstance(conn, sqlite3.Connection)

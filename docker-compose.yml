@@ -1,15 +1,15 @@
 # ── Zentinull — Docker Compose ───────────────────────────────────────────────
 # Quick start:
-#   docker compose up              # API server + dashboard
+#   docker compose up              # API server + dashboard (server includes background scheduler)
 #   docker compose run demo        # Seed demo data, then start (one-shot)
 #   docker compose up --build      # Rebuild after code changes
 #   docker compose exec api python serve.py status  # run CLI commands
 #
 # Services:
-#   api       — FastAPI server on :8001 (hot-reload enabled)
+#   api       — FastAPI server on :8001 with background data refresh (hot-reload enabled)
 #   dashboard — Streamlit dashboard on :8501
 #   demo      — One-shot: seed demo data, confirm, then start API+dashboard
-#
+#   worker    — Optional standalone scheduler (not needed when api handles scheduling)
 # Volumes:
 #   ./data      → /app/data       (persist mesh database across restarts)
 #   ./src       → /app/src        (hot-reload source code in dev)

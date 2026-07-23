@@ -7,6 +7,7 @@ Usage:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import subprocess
@@ -20,6 +21,14 @@ import httpx
 import streamlit as st
 from zentinull.manifest import load_manifest
 
+
+@st.cache_resource
+def _get_manifest():
+    try:
+        return load_manifest()
+    except Exception:
+        logging.exception("Failed to load manifest in dashboard")
+        return None
 _HERE = Path(__file__).resolve().parent
 _API_BASE = os.environ.get("DASHBOARD_API_URL", "http://localhost:8001")
 
@@ -98,19 +107,28 @@ def _run_serve(args: list[str]) -> SimpleNamespace:
             logging.exception("Pipeline API returned error status")
             return SimpleNamespace(returncode=1, stderr=str(e), stdout="", args=args)
 
-    result = subprocess.run(
-        [sys.executable, str(_HERE / "serve.py"), *args],
-        cwd=str(_HERE),
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    return SimpleNamespace(
-        returncode=result.returncode,
-        stderr=result.stderr,
-        stdout=result.stdout,
-        args=args,
-    )
+    def _exec():
+        return subprocess.run(
+            [sys.executable, str(_HERE / "serve.py"), *args],
+            cwd=str(_HERE),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_exec)
+            result = future.result(timeout=125)
+        return SimpleNamespace(
+            returncode=result.returncode,
+            stderr=result.stderr,
+            stdout=result.stdout,
+            args=args,
+        )
+    except Exception as e:
+        logging.exception("Stage execution failed or timed out")
+        return SimpleNamespace(returncode=1, stderr=str(e), stdout="", args=args)
 
 
 with st.sidebar:
@@ -134,6 +152,7 @@ with st.sidebar:
                 if result.returncode == 0:
                     st.success("Ingest done")
                     _load_status.clear()
+                    _load_mesh_data.clear()
                 else:
                     st.error("Ingest failed")
 
@@ -143,6 +162,7 @@ with st.sidebar:
                 if result.returncode == 0:
                     st.success("Export done")
                     _load_status.clear()
+                    _load_mesh_data.clear()
                 else:
                     st.error("Export failed")
 
@@ -153,6 +173,7 @@ with st.sidebar:
                 if result.returncode == 0:
                     st.success("Splink done")
                     _load_status.clear()
+                    _load_mesh_data.clear()
                 else:
                     st.error("Splink failed")
 
@@ -165,7 +186,6 @@ with st.sidebar:
                     _load_status.clear()
                 else:
                     st.error("Load failed")
-
     st.divider()
     st.caption("Auto-refresh every 30s")
 
@@ -225,9 +245,8 @@ for i, sname in enumerate(stage_order):
 st.subheader("Data freshness")
 
 if freshness:
-    # Build _src_labels from manifest
-    manifest = load_manifest()
-    _src_labels = {key: system.label for key, system in manifest.systems.items()}
+    manifest = _get_manifest()
+    _src_labels = {key: system.label for key, system in manifest.systems.items()} if manifest else {}
     fcols = st.columns(min(len(freshness), 6))
     for i, (skey, sf) in enumerate(sorted(freshness.items())):
         with fcols[i]:

@@ -323,6 +323,18 @@ class TestAnomalies:
                 assert "cluster_id" in item
                 assert "device_name" in item
 
+    def test_zombies_is_nonnegative_int(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies()['zombies'] is an int >= 0."""
+        result = seeded_meshdb.anomalies()
+        assert isinstance(result["zombies"], int)
+        assert result["zombies"] >= 0
+
+    def test_hardware_drift_is_nonnegative_int(self, seeded_meshdb: MeshDB) -> None:
+        """anomalies()['hardware_drift'] is an int >= 0."""
+        result = seeded_meshdb.anomalies()
+        assert isinstance(result["hardware_drift"], int)
+        assert result["hardware_drift"] >= 0
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # _resolve_cluster — 7-step resolution cascade
@@ -542,13 +554,17 @@ class TestLookup:
     """Tests for lookup() — resolve + build story in one call."""
 
     def test_by_device_name(self, seeded_meshdb: MeshDB) -> None:
-        """lookup("ws28") returns a DeviceStory with correct cluster_id."""
+        """lookup("ws28") returns a DeviceStory with correct cluster_id and SOT."""
         result = seeded_meshdb.lookup("ws28")
         assert result is not None
         assert result.cluster_id == "c1"
         assert result.device_name == "ws28"
         assert result.source_count == 3
         assert len(result.records) == 3
+        # SOT resolution produces per-field priority
+        assert "sot" in result.model_dump()
+        assert "name" in result.sot
+        assert isinstance(result.sot["name"]["priority"], str)
 
     def test_miss(self, seeded_meshdb: MeshDB) -> None:
         """lookup for nonexistent query returns None."""

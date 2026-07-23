@@ -45,11 +45,11 @@ def rest_json_fetch(endpoint: dict[str, Any], auth: object) -> list[dict[str, An
     """
     url = endpoint["url"]
     response_path = endpoint.get("response_path")
+    verify = endpoint.get("verify", True)
     headers = auth.get_headers() if hasattr(auth, "get_headers") else {}
 
     try:
-        r = requests.get(url, headers=headers, verify=False, timeout=(10, 30))
-        r.raise_for_status()
+        r = requests.get(url, headers=headers, verify=verify, timeout=(10, 30))
         data = r.json()
 
         if response_path:

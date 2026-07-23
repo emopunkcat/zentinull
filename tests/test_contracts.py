@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 
 from zentinull.api.models import ClusterInfo, SourceRecord
-from zentinull.api.schema import DEVICES_SQL
+from zentinull.api.schema import build_devices_sql
 from zentinull.manifest import load_manifest
 
 
@@ -36,11 +36,12 @@ def test_manifest_specs_cover_core_splink_fields() -> None:
 
 
 def test_devices_sql_uses_contract_columns() -> None:
-    """Verify that DEVICES_SQL references SPLINK_FIELDS columns."""
+    """Verify that build_devices_sql references SPLINK_FIELDS columns."""
+    devices_sql = build_devices_sql(load_manifest().profiles["device"])
     for field in _splink_fields():
-        if field in ("source", "source_id", "extra_attributes"):
-            continue  # per-record fields not meaningful in consolidated devices table
-        assert field in DEVICES_SQL, f"DEVICES_SQL does not reference contract field: {field}"
+        if field in ("source", "source_id", "extra_attributes", "name_fallback", "name_clean", "mac_clean", "name"):
+            continue  # per-record / derived blocking fields not meaningful in consolidated devices table
+        assert field in devices_sql, f"Devices SQL does not reference contract field: {field}"
 
 
 def test_source_record_covers_splink_fields() -> None:
@@ -70,7 +71,8 @@ def test_duckdb_schema_retains_fields_and_models() -> None:
         # Create temp source_records with SPLINK_FIELDS
         cols_ddl = ", ".join(f"{f} TEXT" for f in _splink_fields())
         conn.execute(f"CREATE TABLE source_records (cluster_id TEXT, {cols_ddl})")
-        conn.execute(DEVICES_SQL)
+        devices_sql = build_devices_sql(load_manifest().profiles["device"])
+        conn.execute(devices_sql)
 
         # Get column list of devices table
         res = conn.execute("DESCRIBE devices").fetchall()

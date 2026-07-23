@@ -176,7 +176,8 @@ def test_export_creates_csv(tmp_path, monkeypatch):
     csv_dir = tmp_path / "export" / "csv"
     _setup_me_db(data_dir)
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -201,7 +202,8 @@ def test_export_name_clean_normalized(tmp_path, monkeypatch):
         raw_json=json.dumps({"resource_id": "res_001", "fqdn_name": "WS28.domain.com"}),
     )
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -224,7 +226,8 @@ def test_export_mac_clean_normalized(tmp_path, monkeypatch):
         raw_json=json.dumps({"resource_id": "res_001", "mac_address": "AA:BB:CC:DD:EE:FF"}),
     )
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -245,7 +248,8 @@ def test_export_missing_db_skipped(tmp_path, monkeypatch):
     # Only create me.sqlite — sp, fg, zbx, ad, sdp DBs are missing
     _setup_me_db(data_dir)
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -270,7 +274,8 @@ def test_export_missing_table_skipped(tmp_path, monkeypatch):
     # Create fg.sqlite with a clients table
     _setup_fg_clients_db(data_dir)
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -315,7 +320,8 @@ def test_export_field_mapping(tmp_path, monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -341,7 +347,8 @@ def test_export_mac_clean_too_short(tmp_path, monkeypatch):
     csv_dir = tmp_path / "export" / "csv"
     _setup_me_db(data_dir, mac_address="AA:BB:CC")
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -368,7 +375,8 @@ def test_export_db_error_skipped(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     table_check_result = [("computers",)]
     pragma_result = [("id",), ("resource_id",), ("name",), ("serial_number",)]
@@ -408,7 +416,8 @@ def test_export_main_block(tmp_path, monkeypatch):
     csv_dir = tmp_path / "export" / "csv"
     _setup_me_db(data_dir)
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     # __main__ just calls export(), so call it directly
     export_mod.export()
@@ -442,7 +451,8 @@ def test_export_me_mdm_field_mapping(tmp_path, monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
 
@@ -500,7 +510,8 @@ def test_export_raw_json_extraction(tmp_path, monkeypatch):
         raw_json=json.dumps(raw),
     )
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
     with open(csv_dir / "devices.csv", newline="", encoding="utf-8") as f:
@@ -552,7 +563,8 @@ def test_export_imei_list_artifact_returns_bare_digit(tmp_path, monkeypatch):
         raw_json=json.dumps(raw),
     )
 
-    monkeypatch.setattr(export_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    monkeypatch.setattr(export_mod, "get_paths", lambda: paths)
 
     export_mod.export()
     with open(csv_dir / "devices.csv", newline="", encoding="utf-8") as f:

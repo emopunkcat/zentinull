@@ -35,7 +35,7 @@ def test_list_dbs_empty_dir(tmp_path, monkeypatch, capsys):
     """No .sqlite files → prints warning message."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: _make_paths(tmp_path))
 
     from zentinull.cli.db_mgmt import list_dbs
 
@@ -49,8 +49,9 @@ def test_list_dbs_with_one_db(tmp_path, monkeypatch, capsys):
     """One SQLite file with a table → output shows db name and row count."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    data_dir = paths.data_dir
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: paths)
 
     db_path = data_dir / "test.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -74,8 +75,9 @@ def test_list_dbs_with_multiple_dbs(tmp_path, monkeypatch, capsys):
     """Two SQLite files → output includes both names."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    data_dir = paths.data_dir
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: paths)
 
     for name in ("alpha.sqlite", "beta.sqlite"):
         db_path = data_dir / name
@@ -103,7 +105,7 @@ def test_vacuum_dbs_empty_dir(tmp_path, monkeypatch, capsys):
     """No .sqlite files → prints warning message."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: _make_paths(tmp_path))
 
     from zentinull.cli.db_mgmt import vacuum_dbs
 
@@ -117,8 +119,9 @@ def test_vacuum_dbs_with_db(tmp_path, monkeypatch, capsys):
     """SQLite with data → VACUUM runs, before/after sizes printed."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    data_dir = paths.data_dir
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: paths)
 
     db_path = data_dir / "test.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -147,7 +150,7 @@ def test_check_dbs_empty(tmp_path, monkeypatch, capsys):
     """No .sqlite files → prints warning message."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: _make_paths(tmp_path))
 
     from zentinull.cli.db_mgmt import check_dbs
 
@@ -161,8 +164,9 @@ def test_check_dbs_passes(tmp_path, monkeypatch, capsys):
     """Valid SQLite DB → PASS in output."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    data_dir = paths.data_dir
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: paths)
 
     db_path = data_dir / "test.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -182,8 +186,9 @@ def test_check_dbs_corrupt_file(tmp_path, monkeypatch, capsys):
     """Non-SQLite file renamed to .sqlite → shows FAIL."""
     import zentinull.cli.db_mgmt as db_mgmt_mod
 
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(db_mgmt_mod, "PATHS", _make_paths(tmp_path))
+    paths = _make_paths(tmp_path)
+    data_dir = paths.data_dir
+    monkeypatch.setattr(db_mgmt_mod, "get_paths", lambda: paths)
 
     db_path = data_dir / "corrupt.sqlite"
     db_path.write_text("not a database file")

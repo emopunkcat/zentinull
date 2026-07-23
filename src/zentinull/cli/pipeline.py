@@ -17,20 +17,32 @@ import os
 import sqlite3
 import sys
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
 import duckdb
 
-from ..api.schema import ATTACHMENTS_SQL, DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL, SOURCE_RECORDS_SQL
-from ..config import PATHS, ROOT
+from ..api.schema import (
+    ATTACHMENTS_SQL,
+    EVENTS_SQL,
+    INDEXES_SQL,
+    METRICS_SQL,
+    SOURCE_RECORDS_SQL,
+    build_devices_sql,
+    create_enriched_view,
+    create_extra_view,
+)
+from ..config import ROOT, get_paths
+from ..export_for_splink import _FEED_SOURCE_MAP, normalize_record
 from ..export_for_splink import export as _run_export_fn
 from ..ingest_adapter import run_ingest as _run_ingest_from_adapter
+from ..ingestors.base import validate_identifier
 from ..logging_config import StepTimer, get_logger
 from ..manifest import Manifest, get_system_feeds, load_manifest
 from ..manifest.types import Role
 from ..manifest.walker import walk_feed
-from ..normalizer import normalize_mac, normalize_name, normalize_serial, strip_sentinels
 from ..resolve.attach import resolve_feed_attachments
+from ..valentine import run_valentine
 from .render import is_brutalist_enabled, render_banner, render_stage
 from .status import record_done, record_fail, record_start
 from .streaming import run_streaming
@@ -57,11 +69,10 @@ PYTHON = sys.executable or "python3"
 log = get_logger("cli.pipeline")
 
 
+@lru_cache(maxsize=1)
 def _get_manifest() -> Manifest:
     """Load and cache the manifest for the current project."""
-    if not hasattr(_get_manifest, "_cache"):
-        _get_manifest._cache = load_manifest()  # type: ignore
-    return _get_manifest._cache  # type: ignore
+    return load_manifest()
 
 
 def _build_source_map() -> dict[str, tuple[str, str]]:
@@ -85,17 +96,6 @@ def _build_source_to_tables() -> dict[str, list[str]]:
 _SOURCE_MAP = _build_source_map()
 _SOURCE_TO_TABLES = _build_source_to_tables()
 
-# Feed key → source column value mapping (preserves current CSV source values for backward compat)
-_FEED_SOURCE_MAP: dict[str, str] = {
-    "sp_devices": "sp",
-    "me_ec": "me_ec",
-    "me_mdm": "me_mdm",
-    "fg_clients": "fg",
-    "fg_dhcp": "fg_dhcp",
-    "zbx_hosts": "zbx",
-    "ad_computers": "ad",
-    "sdp_assets": "sdp",
-}
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
 
@@ -135,11 +135,16 @@ def run_export() -> int:
 
     Returns total record count (rows in the generated CSV, minus header).
     """
+    paths = get_paths()
     record_start("export")
     with StepTimer(log, "export"):
         _run_export_fn()
 
-    csv_path = PATHS.csv_dir / "devices.csv"
+    csv_path = paths.csv_dir / "devices.csv"
+    tmp_path = paths.csv_dir / "devices.csv.tmp"
+    if tmp_path.exists() and (not csv_path.exists() or tmp_path.stat().st_mtime > csv_path.stat().st_mtime):
+        log.warning({"event": "export_stale_csv", "reason": "devices.csv locked, using .tmp"})
+        csv_path = tmp_path
     if not csv_path.exists():
         raise FileNotFoundError(f"Export did not produce {csv_path}")
 
@@ -161,7 +166,9 @@ def _record_coverage_baseline() -> None:
 
     from .status import record_coverage_baseline
 
-    csv_path = PATHS.csv_dir / "devices.csv"
+    paths = get_paths()
+
+    csv_path = paths.csv_dir / "devices.csv"
     if not csv_path.exists():
         return
 
@@ -195,6 +202,7 @@ def export_source(source_key: str) -> int:
 
     Returns record count for that source.
     """
+    paths = get_paths()
     manifest = _get_manifest()
     profile = manifest.profiles["device"]
     splink_fields = list(profile.fields)
@@ -207,7 +215,7 @@ def export_source(source_key: str) -> int:
     for feed_key in feed_keys:
         feed = manifest.feeds[feed_key]
         db_file = feed.system
-        db_path = PATHS.data_dir / f"{db_file}.sqlite"
+        db_path = paths.data_dir / f"{db_file}.sqlite"
         if not db_path.exists():
             log.warning({"event": "skip", "source": feed_key, "reason": "db_not_found"})
             continue
@@ -216,13 +224,14 @@ def export_source(source_key: str) -> int:
         conn.row_factory = sqlite3.Row
 
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        if feed.store not in tables:
+        store_table = validate_identifier(feed.store)
+        if store_table not in tables:
             log.warning({"event": "skip", "source": feed_key, "reason": "table_not_found"})
             conn.close()
             continue
 
         try:
-            rows = conn.execute(f"SELECT * FROM {feed.store}").fetchall()
+            rows = conn.execute(f"SELECT * FROM {store_table}").fetchall()
         except Exception as e:
             log.warning({"event": "skip", "source": feed_key, "reason": "error", "error": str(e)})
             conn.close()
@@ -231,28 +240,12 @@ def export_source(source_key: str) -> int:
         extracted = walk_feed(feed, rows)
 
         for rec in extracted:
-            rec["source"] = _FEED_SOURCE_MAP.get(feed_key, feed_key)
-            # Derived fields for Splink matching
-            rec["name_clean"] = normalize_name(rec.get("name", ""))
-            rec["mac_clean"] = normalize_mac(rec.get("mac_address", ""))
-            rec["serial_number"] = normalize_serial(rec.get("serial_number", ""))
-            if rec.get("manufacturer"):
-                rec["manufacturer"] = rec["manufacturer"].lower()
-            # Strip sentinels on all target fields
-            for fld in splink_fields:
-                if fld in ("source", "source_id", "name_clean", "mac_clean", "extra_attributes"):
-                    continue
-                rec[fld] = strip_sentinels(rec.get(fld, ""))
-            # Fill missing fields
-            for fld in splink_fields:
-                if fld not in rec:
-                    rec[fld] = ""
-
+            normalize_record(rec, feed_key, splink_fields)
         all_rows.extend(extracted)
         conn.close()
 
-    out_path = PATHS.csv_dir / f"{source_key}.csv"
-    PATHS.csv_dir.mkdir(parents=True, exist_ok=True)
+    out_path = paths.csv_dir / f"{source_key}.csv"
+    paths.csv_dir.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=splink_fields)
         writer.writeheader()
@@ -303,7 +296,8 @@ def _load_zbx_metrics(conn: duckdb.DuckDBPyConnection) -> int:
     source_records (source='zbx', source_id=hostid), and inserts into metrics.
     Silently returns 0 if zbx.sqlite or items table is missing.
     """
-    zbx_db = PATHS.data_dir / "zbx.sqlite"
+    paths = get_paths()
+    zbx_db = paths.data_dir / "zbx.sqlite"
     if not zbx_db.exists():
         return 0
 
@@ -419,14 +413,17 @@ def run_load() -> int:
     """Load clusters.csv into DuckDB mesh using temp-and-swap.
 
     Builds mesh in data/mesh.duckdb.tmp, then atomically renames to mesh.duckdb.
+    Also bridges field_history, record_freshness, and cluster_annotations
+    from per-source SQLite stores and validate.py output.
     Returns total device count.
     """
-    csv_path = PATHS.splink_output_dir / "clusters.csv"
+    paths = get_paths()
+    csv_path = paths.splink_output_dir / "clusters.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"{csv_path} not found — run splink first")
 
-    mesh_path = PATHS.mesh_path
-    tmp_path = PATHS.data_dir / "mesh.duckdb.tmp"
+    mesh_path = paths.mesh_path
+    tmp_path = paths.data_dir / "mesh.duckdb.tmp"
 
     record_start("load")
 
@@ -438,23 +435,125 @@ def run_load() -> int:
         conn = duckdb.connect(str(tmp_path))
 
         try:
-            # Load clusters CSV into source_records table
+            # ── Core tables ────────────────────────────────────────────────
             conn.execute(SOURCE_RECORDS_SQL, [str(csv_path)])
 
             # Build devices table: one row per cluster, consolidated
-            conn.execute(DEVICES_SQL)
+            profile = _get_manifest().profiles["device"]
+            conn.execute(build_devices_sql(profile))
 
             # Metrics & Events (append-only)
             conn.execute(METRICS_SQL)
             conn.execute(EVENTS_SQL)
             conn.execute(ATTACHMENTS_SQL)
 
-            # Load Zabbix items into metrics table
+            # ── Bridge: field_history from per-source SQLite stores ────────
+            conn.execute("""
+                CREATE TABLE field_history (
+                    cluster_id   VARCHAR,
+                    source       VARCHAR NOT NULL,
+                    source_id    VARCHAR NOT NULL,
+                    field        VARCHAR NOT NULL,
+                    old_value    VARCHAR,
+                    new_value    VARCHAR,
+                    changed_at   TIMESTAMP,
+                    batch_id     VARCHAR
+                )
+            """)
+            conn.execute("CREATE INDEX idx_fh_cluster ON field_history(cluster_id)")
+            conn.execute("CREATE INDEX idx_fh_field ON field_history(field)")
+
+            for sqlite_path in sorted(paths.data_dir.glob("*.sqlite")):
+                try:
+                    src_conn = sqlite3.connect(str(sqlite_path))
+                    has_fh = src_conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='field_history'"
+                    ).fetchone()
+                    if not has_fh:
+                        src_conn.close()
+                        continue
+
+                    fh_rows = src_conn.execute(
+                        "SELECT source, source_id, field, old_value, new_value, changed_at, batch_id FROM field_history"
+                    ).fetchall()
+                    if fh_rows:
+                        conn.executemany(
+                            "INSERT INTO field_history "
+                            "(source, source_id, field, old_value, new_value, changed_at, batch_id) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            fh_rows,
+                        )
+                    src_conn.close()
+                except Exception:
+                    log.warning({"event": "bridge_fh_skip", "store": str(sqlite_path)})
+
+            # Map source_id → cluster_id via source_records
+            conn.execute("""
+                UPDATE field_history
+                SET cluster_id = source_records.cluster_id
+                FROM source_records
+                WHERE field_history.source = source_records.source
+                  AND field_history.source_id = source_records.source_id
+            """)
+
+            # ── Bridge: record_freshness from per-source SQLite stores ─────
+            conn.execute("""
+                CREATE TABLE record_freshness (
+                    source       VARCHAR NOT NULL,
+                    source_id    VARCHAR NOT NULL,
+                    fetched_at   TIMESTAMP
+                )
+            """)
+
+            # Build store_name → source key mapping from manifest
+            store_to_source: dict[str, str] = {}
+            for feed in _get_manifest().feeds.values():
+                store_to_source[feed.store] = feed.system
+
+            for sqlite_path in sorted(paths.data_dir.glob("*.sqlite")):
+                try:
+                    src_conn = sqlite3.connect(str(sqlite_path))
+                    has_raw = src_conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='raw_store'"
+                    ).fetchone()
+                    if not has_raw:
+                        src_conn.close()
+                        continue
+
+                    # Derive source key from store name via mapping
+                    store_name = sqlite_path.stem
+                    source_key = store_to_source.get(store_name, store_name)
+
+                    fresh_rows = src_conn.execute(
+                        "SELECT source_id, fetched_at FROM raw_store WHERE fetched_at IS NOT NULL"
+                    ).fetchall()
+                    if fresh_rows:
+                        conn.executemany(
+                            "INSERT INTO record_freshness (source, source_id, fetched_at) VALUES (?, ?, ?)",
+                            [(r[0], source_key, r[1]) for r in fresh_rows],
+                        )
+                    src_conn.close()
+                except Exception:
+                    log.warning({"event": "bridge_freshness_skip", "store": str(sqlite_path)})
+
+            # ── Bridge: cluster_annotations from validate.py output ────────
+            annotations_csv = paths.splink_output_dir / "cluster_annotations.csv"
+            if annotations_csv.exists():
+                conn.execute(
+                    "CREATE TABLE cluster_annotations AS SELECT * FROM read_csv_auto(?, all_varchar=true)",
+                    [str(annotations_csv)],
+                )
+            else:
+                conn.execute("""
+                    CREATE TABLE cluster_annotations (
+                        cluster_id VARCHAR, kind VARCHAR,
+                        field VARCHAR, values VARCHAR, detail VARCHAR
+                    )
+                """)
+
+            # ── Metrics & Indexes ──────────────────────────────────────────
             _load_zbx_metrics(conn)
-
-            # Indexes
             conn.execute(INDEXES_SQL)
-
             conn.execute("CHECKPOINT")
 
             device_count_row = conn.execute("SELECT COUNT(*) FROM devices").fetchone()
@@ -480,13 +579,43 @@ def run_load() -> int:
     return device_count
 
 
+def run_valentine_stage() -> int:
+    """Run Valentine schema matching and refresh DuckDB views.
+
+    Discovers cross-source column relationships via COMA matcher,
+    merges with manual registry, and regenerates v_extra + v_device_enriched.
+    Called after run_load(), before run_attach().
+    """
+    paths = get_paths()
+    record_start("valentine")
+    with StepTimer(log, "valentine"):
+        registry = run_valentine()
+
+        conn = duckdb.connect(str(paths.mesh_path), read_only=False)
+        try:
+            create_extra_view(conn)
+            create_enriched_view(conn, registry)
+            conn.execute("CHECKPOINT")
+            row = conn.execute(
+                "SELECT count(*) FROM information_schema.columns WHERE table_name='v_device_enriched'"
+            ).fetchone()
+            enriched_cols = int(row[0]) if row else 0
+        finally:
+            conn.close()
+
+    log.info({"event": "valentine_complete", "enriched_columns": enriched_cols})
+    record_done("valentine", total=enriched_cols)
+    return enriched_cols
+
+
 def run_attach() -> int:
     """Run attachment resolution for all ATTACHMENT feeds.
 
-    Called after run_load() produces a fresh mesh. Reads raw stores, resolves
-    links, writes into the attachments table.
+    Called after run_load() and run_valentine_stage() produce a fresh mesh.
+    Reads raw stores, resolves links, writes into the attachments table.
     """
-    if not PATHS.mesh_path.exists():
+    paths = get_paths()
+    if not paths.mesh_path.exists():
         log.warning({"event": "attach_skip", "reason": "mesh_not_found"})
         return 0
 
@@ -503,10 +632,10 @@ def run_attach() -> int:
     with StepTimer(log, "attach"):
         for feed_key in attachment_feeds:
             feed = manifest.feeds[feed_key]
-            sqlite_db_path = str(PATHS.data_dir / f"{feed.system}.sqlite")
+            sqlite_db_path = str(paths.data_dir / f"{feed.system}.sqlite")
 
             try:
-                rows = resolve_feed_attachments(feed, feed_key, str(PATHS.mesh_path), sqlite_db_path)
+                rows = resolve_feed_attachments(feed, feed_key, str(paths.mesh_path), sqlite_db_path)
             except Exception as e:
                 log.error({"event": "attach_failed", "feed": feed_key, "error": str(e)})
                 continue
@@ -515,7 +644,7 @@ def run_attach() -> int:
                 log.info({"event": "attach_empty", "feed": feed_key})
                 continue
 
-            conn = duckdb.connect(str(PATHS.mesh_path), read_only=False)
+            conn = duckdb.connect(str(paths.mesh_path), read_only=False)
             try:
                 conn.execute(ATTACHMENTS_SQL)
                 # Remove stale links for this feed
@@ -560,7 +689,8 @@ def run_incremental_load(sources: list[str]) -> int:
 
     Returns device count after rebuild.
     """
-    if not PATHS.mesh_path.exists():
+    paths = get_paths()
+    if not paths.mesh_path.exists():
         log.warning({"event": "incremental_load_skip", "reason": "mesh_not_found"})
         return 0
 
@@ -572,7 +702,7 @@ def run_incremental_load(sources: list[str]) -> int:
     splink_fields = list(profile.fields)
 
     with StepTimer(log, "incremental_load"):
-        conn = duckdb.connect(str(PATHS.mesh_path), read_only=False)
+        conn = duckdb.connect(str(paths.mesh_path), read_only=False)
         try:
             import contextlib
 
@@ -580,50 +710,74 @@ def run_incremental_load(sources: list[str]) -> int:
                 conn.execute("SELECT DISTINCT cluster_id FROM source_records").fetchall()
 
             for source_key in sources:
-                csv_path = PATHS.csv_dir / f"{source_key}.csv"
+                csv_path = paths.csv_dir / f"{source_key}.csv"
                 if not csv_path.exists():
                     log.warning({"event": "incremental_skip", "source": source_key, "reason": "csv_not_found"})
                     continue
 
-                # Read CSV via Python csv.DictReader (avoids DuckDB read_csv_auto
-                # delimiter-detection issues with tiny files).
+                # Derive all source column values for this system — a system can
+                # have multiple ANCHOR feeds each mapping to a different source
+                # value (e.g. fg_clients → 'fg', fg_dhcp → 'fg_dhcp'). Query
+                # existing_ids for ALL of them so cross-feed records aren't
+                # treated as "new" on every incremental sync.
                 import uuid
 
-                existing = conn.execute(
-                    "SELECT source_id FROM source_records WHERE source = ?", [source_key]
+                source_values: list[str] = []
+                for fk in _SOURCE_TO_TABLES.get(source_key, []):
+                    sv = _FEED_SOURCE_MAP.get(fk, fk)
+                    if sv not in source_values:
+                        source_values.append(sv)
+
+                placeholders = ", ".join("?" for _ in source_values)
+                existing_rows = conn.execute(
+                    f"SELECT source_id, source, cluster_id FROM source_records WHERE source IN ({placeholders})",
+                    source_values,
                 ).fetchall()
-                existing_ids = {r[0] for r in existing}
+                # Key by (source_id, source) because the same source_id can
+                # appear under different source column values (e.g. same MAC in
+                # both fg_clients and fg_dhcp). When duplicate keys exist (from
+                # earlier buggy runs), prefer a Splink-assigned cluster_id over
+                # a temporary new-* id so the collapse keeps the resolved cluster.
+                cluster_by_key: dict[tuple[str, str], str] = {}
+                for r in existing_rows:
+                    key = (r[0], r[1])
+                    cid = r[2] or ""
+                    prev = cluster_by_key.get(key)
+                    if prev is None or (prev.startswith("new-") and not cid.startswith("new-")):
+                        cluster_by_key[key] = cid
 
                 new_count = 0
                 updated_count = 0
+
+                all_cols = ["cluster_id"] + splink_fields
+                insert_sql = (
+                    f"INSERT INTO source_records ({', '.join(all_cols)}) VALUES ({', '.join(['?'] * len(all_cols))})"
+                )
 
                 with open(csv_path, encoding="utf-8") as fh:
                     reader = csv.DictReader(fh)
                     for row_dict in reader:
                         sid = row_dict.get("source_id", "")
+                        src = row_dict.get("source", "")
 
-                        if sid in existing_ids:
-                            set_clauses = []
-                            values = []
-                            for col in splink_fields:
-                                if col in ("source", "source_id"):
-                                    continue
-                                set_clauses.append(f"{col} = ?")
-                                values.append(row_dict.get(col, ""))
-                            values.extend([source_key, sid])
-                            conn.execute(
-                                f"UPDATE source_records SET {', '.join(set_clauses)} WHERE source = ? AND source_id = ?",
-                                values,
-                            )
-                            updated_count += 1
-                        else:
+                        key = (sid, src)
+                        cluster_id = cluster_by_key.get(key)
+                        if cluster_id is None:
                             cluster_id = f"new-{source_key}-{uuid.uuid4().hex[:8]}"
-                            all_cols = ["cluster_id"] + list(splink_fields)
-                            cols = ", ".join(all_cols)
-                            placeholders = ", ".join(["?"] * len(all_cols))
-                            values = [cluster_id] + [row_dict.get(c, "") for c in splink_fields]
-                            conn.execute(f"INSERT INTO source_records ({cols}) VALUES ({placeholders})", values)
+                            cluster_by_key[key] = cluster_id
                             new_count += 1
+                        else:
+                            updated_count += 1
+                        # True upsert: DELETE + INSERT keeps exactly one row per
+                        # (source, source_id), collapsing any duplicates that
+                        # accumulated from previous runs while preserving the
+                        # existing cluster_id.
+                        conn.execute(
+                            "DELETE FROM source_records WHERE source = ? AND source_id = ?",
+                            [src, sid],
+                        )
+                        values = [cluster_id] + [row_dict.get(c, "") for c in splink_fields]
+                        conn.execute(insert_sql, values)
 
                 import_count = new_count + updated_count
                 log.info(
@@ -636,7 +790,7 @@ def run_incremental_load(sources: list[str]) -> int:
                     }
                 )
 
-            conn.execute(DEVICES_SQL)
+            conn.execute(build_devices_sql(profile))
             conn.execute("CHECKPOINT")
 
             device_count_row = conn.execute("SELECT COUNT(*) FROM devices").fetchone()
@@ -660,7 +814,8 @@ def run_incremental_sync(sources: list[str]) -> int:
 
     Returns device count.
     """
-    lock_path = PATHS.data_dir / "pipeline.lock"
+    paths = get_paths()
+    lock_path = paths.data_dir / "pipeline.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")  # noqa: SIM115
     have_lock = False
@@ -702,7 +857,7 @@ def run_incremental_sync(sources: list[str]) -> int:
                 log.info({"event": "sync_stage", "stage": "export", "source": source_key})
                 export_source(source_key)
 
-        if not PATHS.mesh_path.exists():
+        if not paths.mesh_path.exists():
             log.warning({"event": "sync_skip", "reason": "mesh_not_found", "hint": "run full pipeline first"})
             return 0
 
@@ -738,9 +893,10 @@ def run_pipeline(
     Each stage is streamed and status-tracked independently.
     Uses a PID-based lock file to prevent concurrent pipeline runs.
     """
+    paths = get_paths()
 
     # ── Concurrency guard ──────────────────────────────────────────────
-    lock_path = PATHS.data_dir / "pipeline.lock"
+    lock_path = paths.data_dir / "pipeline.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")  # noqa: SIM115
     have_lock = False
@@ -779,10 +935,23 @@ def run_pipeline(
         log.info({"event": "pipeline_stage", "stage": "splink"})
         run_splink()
 
+        log.info({"event": "pipeline_stage", "stage": "validate"})
+        record_start("validate")
+        with StepTimer(log, "validate"):
+            from ..resolve.validate import validate_clusters
+
+            annotations = validate_clusters(paths.splink_output_dir / "clusters.csv")
+        record_done("validate", annotations=len(annotations))
+
         if is_brutalist_enabled():
             render_stage("LOAD")
         log.info({"event": "pipeline_stage", "stage": "load"})
         device_count = run_load()
+
+        if is_brutalist_enabled():
+            render_stage("DISCOVER")
+        log.info({"event": "pipeline_stage", "stage": "valentine"})
+        enriched_cols = run_valentine_stage()
 
         if is_brutalist_enabled():
             render_stage("ATTACH")
@@ -790,7 +959,7 @@ def run_pipeline(
         attach_count = run_attach()
         log.info({"event": "attach_complete", "attachments": attach_count})
 
-        log.info({"event": "pipeline_complete", "devices": device_count})
+        log.info({"event": "pipeline_complete", "devices": device_count, "enriched": enriched_cols})
     finally:
         if have_lock:
             lock_file.close()

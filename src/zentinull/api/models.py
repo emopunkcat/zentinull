@@ -21,12 +21,19 @@ class SourceRecord(BaseModel):
     os_version: str = ""
     asset_tag: str = ""
     mac_clean: str = ""
+    name_fallback: str = ""
     manufacturer: str = ""
     model: str = ""
     os: str = ""
     assigned_user: str = ""
+    os_family: str = ""
     ip_address: str = ""
     imei: str = ""
+    mdm_latitude: str = ""
+    mdm_longitude: str = ""
+    mdm_horizontal_accuracy: str = ""
+    mdm_location_address: str = ""
+    mdm_located_time: str = ""
     extra_attributes: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -44,14 +51,20 @@ class ClusterInfo(BaseModel):
     asset_tag: str = ""
     model: str = ""
     os: str = ""
+    os_family: str = ""
     assigned_user: str = ""
     ip_address: str = ""
     imei: str = ""
+    mdm_latitude: str = ""
+    mdm_longitude: str = ""
+    mdm_horizontal_accuracy: str = ""
+    mdm_location_address: str = ""
+    mdm_located_time: str = ""
     record_count: int = 0
 
 
 class DeviceStory(BaseModel):
-    """Full device story — consolidated view + per-source records."""
+    """Full device story — consolidated view + enriched view + per-source records."""
 
     query: str
     cluster_id: str
@@ -60,7 +73,10 @@ class DeviceStory(BaseModel):
     sources: list[str] = Field(default_factory=list)
     record_count: int = 0
     consolidated: dict[str, list[str]] = Field(default_factory=dict)
+    enriched: dict[str, str] = Field(default_factory=dict)
     records: list[SourceRecord] = Field(default_factory=list)
+    sot: dict[str, dict[str, str]] = Field(default_factory=dict)
+    drift_audit: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MeshStats(BaseModel):
@@ -97,6 +113,12 @@ class AnomaliesReport(BaseModel):
     no_name: int = 0
     no_name_list: list[ClusterInfo] = Field(default_factory=list)
     no_serial: int = 0
+    zombies: int = 0
+    zombie_list: list[ClusterInfo] = Field(default_factory=list)
+    hardware_drift: int = 0
+    hardware_drift_list: list[dict[str, Any]] = Field(default_factory=list)
+    review_total: int = 0
+    review_list: list[dict[str, Any]] = Field(default_factory=list)
     no_serial_list: list[ClusterInfo] = Field(default_factory=list)
 
 
@@ -218,3 +240,33 @@ class DeviceMetricSummaryResponse(BaseModel):
     cluster_id: str
     hours: int = 24
     metrics: dict[str, MetricAggregate] = Field(default_factory=dict)
+
+
+class HistoryEntry(BaseModel):
+    """A single field-change event for a device cluster."""
+
+    field: str
+    old_value: str = ""
+    new_value: str = ""
+    changed_at: str = ""
+    source: str = ""
+
+
+class DeviceHistoryResponse(BaseModel):
+    """GET /device/{query}/history — field change history."""
+
+    query: str
+    cluster_id: str
+    history: list[HistoryEntry] = Field(default_factory=list)
+
+
+class DeviceTraceResponse(BaseModel):
+    """GET /device/{query}/trace — full identity trace."""
+
+    query_cluster_id: str = ""
+    device: dict[str, Any] = Field(default_factory=dict)
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    linked_devices: list[dict[str, Any]] = Field(default_factory=list)
+    vlans: list[dict[str, Any]] = Field(default_factory=list)
+    graph: dict[str, Any] = Field(default_factory=dict)

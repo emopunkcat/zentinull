@@ -142,7 +142,7 @@ def test_audit_mapping_propose_output(tmp_path: Path, capsys: pytest.CaptureFixt
 
     # Monkeypatch DATA_DIR in serve's import scope (cmd_audit_mapping imports it locally)
     _paths = _make_paths(tmp_path)
-    with patch("zentinull.config.PATHS", _paths):
+    with patch("zentinull.config.get_paths", lambda: _paths):
         args = _make_args(propose="sdp_requests", strict=False)
         with contextlib.suppress(SystemExit):
             cmd_audit_mapping(args)
@@ -163,7 +163,7 @@ def test_audit_mapping_strict_exits_nonzero_on_drift(tmp_path: Path, capsys: pyt
     _create_sqlite_with_raw(data_dir, "sdp.sqlite", "requests", records)
 
     _paths = _make_paths(tmp_path)
-    with patch("zentinull.config.PATHS", _paths):
+    with patch("zentinull.config.get_paths", lambda: _paths):
         args = _make_args(propose=None, strict=True)
         with pytest.raises(SystemExit) as exc_info:
             cmd_audit_mapping(args)

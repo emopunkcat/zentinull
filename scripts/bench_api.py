@@ -65,12 +65,12 @@ ENDPOINT_BENCHMARKS: list[tuple[str, str, dict[str, Any] | None, str]] = [
 
 def _create_seeded_db(path: Path) -> None:
     """Create a temporary DuckDB with seeded data — matches test fixture shape."""
-    from zentinull.api.schema import ATTACHMENTS_SQL, DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
+    from zentinull.api.schema import ATTACHMENTS_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL, build_devices_sql
+    from zentinull.manifest import load_manifest
 
     conn = duckdb.connect(str(path))
     now = datetime.now(UTC)
 
-    # ── source_records ────────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE source_records (
             cluster_id TEXT NOT NULL,
@@ -88,7 +88,15 @@ def _create_seeded_db(path: Path) -> None:
             assigned_user TEXT DEFAULT '',
             ip_address TEXT DEFAULT '',
             imei TEXT DEFAULT '',
-            asset_tag TEXT DEFAULT ''
+            asset_tag TEXT DEFAULT '',
+            name_fallback TEXT DEFAULT '',
+            mdm_latitude TEXT DEFAULT '',
+            mdm_longitude TEXT DEFAULT '',
+            mdm_horizontal_accuracy TEXT DEFAULT '',
+            mdm_location_address TEXT DEFAULT '',
+            mdm_located_time TEXT DEFAULT '',
+            extra_attributes TEXT DEFAULT '',
+            os_family TEXT DEFAULT ''
         )
     """)
 
@@ -171,12 +179,16 @@ def _create_seeded_db(path: Path) -> None:
     ]
     for row in src_rows:
         conn.execute(
-            "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            row,
+            "INSERT INTO source_records (cluster_id, source, source_id, name, name_clean, serial_number, "
+            "mac_address, mac_clean, manufacturer, model, os, os_version, assigned_user, ip_address, imei, "
+            "asset_tag, extra_attributes, os_family) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            row + ("", ""),
         )
 
     # ── devices ──────────────────────────────────────────────────────────
-    conn.execute(DEVICES_SQL)
+    profile = load_manifest().profiles["device"]
+    conn.execute(build_devices_sql(profile))
 
     # ── metrics ──────────────────────────────────────────────────────────
     conn.execute(METRICS_SQL)

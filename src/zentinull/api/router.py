@@ -18,13 +18,16 @@ from .models import (
     ClusterListResponse,
     DashboardStats,
     DeviceAttachmentsResponse,
+    DeviceHistoryResponse,
     DeviceMetricsResponse,
     DeviceMetricSummaryResponse,
     DeviceStatsBlock,
     DeviceStatsResponse,
     DeviceStory,
     DeviceTimelineResponse,
+    DeviceTraceResponse,
     EventRecord,
+    HistoryEntry,
     MeshStats,
     MetricAggregate,
     MetricLatest,
@@ -110,6 +113,26 @@ async def device(query: str, request: Request) -> dict[str, Any]:
     return result.model_dump()
 
 
+@router.get("/device/{query}/trace", response_model=DeviceTraceResponse)
+async def device_trace(query: str, request: Request) -> dict[str, Any]:
+    """
+    Full mesh trace from any keyword — resolves to device, then expands:
+    - Other devices sharing the same assigned_user
+    - All attachments (account info, notes, purchases, employees)
+    - Linked devices via shared attachments (same purchase, same account)
+    - VLAN membership
+    - Node/edge graph for visualization
+
+    Works with any query: hostname, serial, MAC, IP, asset tag, user email, etc.
+    """
+    log.info({"event": "request", "endpoint": "/device/{query}/trace", "query": query})
+    db = _db(request)
+    story = db.lookup(query)
+    if story is None:
+        raise HTTPException(404, f"'{query}' not found")
+    return db.device_trace(story.cluster_id)
+
+
 @router.post("/batch", response_model=list[DeviceStory | None])
 async def batch(request: Request) -> list[dict[str, Any] | None]:
     """
@@ -191,6 +214,13 @@ async def anomalies(request: Request) -> dict[str, Any]:
     return _db(request).anomalies()
 
 
+@router.get("/diagnostics/unmapped-fields")
+async def unmapped_fields(request: Request) -> list[dict[str, Any]]:
+    """Top unmapped raw fields per source — from extra_attributes JSON."""
+    log.info({"event": "request", "endpoint": "/diagnostics/unmapped-fields"})
+    return _db(request).unmapped_fields()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Metrics & Events (time-series)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -259,6 +289,40 @@ async def device_attachments(query: str, request: Request) -> DeviceAttachmentsR
     raw = db.device_attachments(cluster_id)
     attachments = [AttachmentRecord(**r) for r in raw]
     return DeviceAttachmentsResponse(cluster_id=cluster_id, attachments=attachments)
+
+
+@router.get("/device/{query}/history", response_model=DeviceHistoryResponse)
+async def device_history(query: str, request: Request) -> DeviceHistoryResponse:
+    """Field change history for a device cluster."""
+    log.info({"event": "request", "endpoint": "/device/{query}/history", "query": query})
+    db = _db(request)
+    cluster_id = _resolve_cluster(db, query)
+    conn = db._conn()
+    try:
+        rows = conn.execute(
+            "SELECT cluster_id, source, field, old_value, new_value, "
+            "CAST(changed_at AS VARCHAR) AS changed_at FROM field_history "
+            "WHERE cluster_id = ? ORDER BY changed_at DESC LIMIT 100",
+            [cluster_id],
+        ).fetchall()
+        cols = [d[0] for d in conn.description]
+        history = [
+            HistoryEntry(
+                field=r[cols.index("field")],
+                old_value=r[cols.index("old_value")] or "",
+                new_value=r[cols.index("new_value")] or "",
+                changed_at=r[cols.index("changed_at")] or "",
+                source=r[cols.index("source")] or "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+    return DeviceHistoryResponse(
+        query=query,
+        cluster_id=cluster_id,
+        history=history,
+    )
 
 
 @router.get("/device/{query}/stats", response_model=DeviceStatsResponse)

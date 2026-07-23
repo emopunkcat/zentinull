@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zentinull.config import PATHS, ROOT, resolve_paths
+from zentinull.config import ROOT, get_paths, resolve_paths
 
 
 def test_default_project_paths_byte_identical():
@@ -27,10 +27,10 @@ def test_non_default_project_paths():
 
 
 def test_paths_singleton_matches_default():
-    """Module-level PATHS matches resolve_paths('default')."""
+    """get_paths() matches resolve_paths('default')."""
     default = resolve_paths("default")
-    assert PATHS.data_dir == default.data_dir
-    assert PATHS.mesh_path == default.mesh_path
+    assert get_paths().data_dir == default.data_dir
+    assert get_paths().mesh_path == default.mesh_path
 
 
 def test_benchmarks_dir_global_for_all_projects():

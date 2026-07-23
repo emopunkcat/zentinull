@@ -61,6 +61,7 @@ def sdp_cursor_fetch(endpoint: dict[str, Any], auth: object) -> list[dict[str, A
     page_size = pagination.get("row_count", 100)
     sort_field = pagination.get("sort_field")
     sort_order = pagination.get("sort_order", "asc")
+    field_names = endpoint.get("field_names")  # optional list of fields to request
 
     start_index = 1
     all_items: list[dict[str, Any]] = []
@@ -77,7 +78,10 @@ def sdp_cursor_fetch(endpoint: dict[str, Any], auth: object) -> list[dict[str, A
                 list_info["sort_field"] = sort_field
                 list_info["sort_order"] = sort_order
 
-            params = {"input_data": json.dumps({"list_info": list_info})}
+            input_data: dict[str, Any] = {"list_info": list_info}
+            if field_names:
+                input_data["field_names"] = field_names
+            params = {"input_data": json.dumps(input_data)}
             log.info(
                 {
                     "event": "fetching",

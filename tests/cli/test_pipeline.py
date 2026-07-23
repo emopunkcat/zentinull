@@ -162,7 +162,8 @@ class TestRunExport:
         """When export succeeds and CSV exists, returns row count (minus header)."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         csv_dir = tmp_path / "export" / "csv"
@@ -179,7 +180,8 @@ class TestRunExport:
         """When CSV is not produced by export, FileNotFoundError is raised."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         from zentinull.cli.pipeline import run_export
@@ -193,7 +195,8 @@ class TestRunExport:
         """A CSV with only a header row returns 0."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
         monkeypatch.setattr(pipeline_mod, "_run_export_fn", lambda: None)
 
         csv_dir = tmp_path / "export" / "csv"
@@ -341,9 +344,11 @@ class TestRunLoad:
     """
 
     CSV_HEADER = (
-        "cluster_id,source,name,name_clean,serial_number,"
-        "mac_address,mac_clean,asset_tag,manufacturer,model,os,"
-        "os_version,assigned_user,ip_address,imei,extra_attributes"
+        "cluster_id,source,source_id,name,name_clean,serial_number,"
+        "mac_address,mac_clean,name_fallback,asset_tag,manufacturer,model,os,"
+        "os_version,assigned_user,ip_address,imei,"
+        "mdm_latitude,mdm_longitude,mdm_horizontal_accuracy,mdm_location_address,mdm_located_time,"
+        "extra_attributes,os_family"
     )
 
     @staticmethod
@@ -359,7 +364,8 @@ class TestRunLoad:
         """When clusters.csv doesn't exist, FileNotFoundError is raised."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         from zentinull.cli.pipeline import run_load
 
@@ -370,15 +376,16 @@ class TestRunLoad:
         """When CSV exists, builds DuckDB with correct tables and returns device count."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         self._create_clusters_csv(
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,ws28,ws28,SER001,aa:bb:cc:dd:ee:ff,aa:bb:cc:dd:ee:ff,,Dell,Latitude,Windows,,jdoe,10.0.0.1,,",
-                "1,AD,WS28,ws28,SER001,,,,,Dell,Latitude,Windows,,jdoe,,,",
-                "2,ZBX,srv-core,srv-core,SER002,,,,HP,ProLiant,Linux,,root,10.0.0.2,,",
+                "1,FG,fg-1,ws28,ws28,SER001,aa:bb:cc:dd:ee:ff,aa:bb:cc:dd:ee:ff,,,Dell,Latitude,Windows,,jdoe,10.0.0.1,,,,,,,,",
+                "1,AD,ad-1,WS28,ws28,SER001,,,,,,Dell,Latitude,Windows,,jdoe,,,,,,,,",
+                "2,ZBX,zbx-1,srv-core,srv-core,SER002,,,,,,HP,ProLiant,Linux,,root,10.0.0.2,,,,,,,",
             ],
         )
 
@@ -426,7 +433,8 @@ class TestRunLoad:
         """A stale mesh.duckdb.tmp from a previous failed run is cleaned up before loading."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         # Create a stale temp file first
         data_dir = tmp_path / "data"
@@ -437,7 +445,7 @@ class TestRunLoad:
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,node1,node1,SER001,,,,,,,,,,,",
+                "1,FG,node1,node1,node1,SER001,,,,,,,,,,,,,,,,,,",
             ],
         )
 
@@ -455,7 +463,8 @@ class TestRunLoad:
         """If SQL execution fails after connection opens, the temp DB file is removed."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
         # Replace SOURCE_RECORDS_SQL with invalid SQL to trigger a failure after connect
         monkeypatch.setattr(pipeline_mod, "SOURCE_RECORDS_SQL", "INVALID SQL STATEMENT $$$")
 
@@ -463,7 +472,7 @@ class TestRunLoad:
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,node1,node1,SER001,,,,,,,,,,,",
+                "1,FG,node1,node1,node1,SER001,,,,,,,,,,,,,,,,,,",
             ],
         )
 
@@ -483,7 +492,8 @@ class TestRunLoad:
         """When a mesh.duckdb already exists, the new load replaces it atomically."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         # Create an old mesh with a marker table
         import duckdb
@@ -500,7 +510,7 @@ class TestRunLoad:
             tmp_path,
             [
                 self.CSV_HEADER,
-                "1,FG,node1,node1,SER001,,,,,,,,,,,",
+                "1,FG,node1,node1,node1,SER001,,,,,,,,,,,,,,,,,,",
             ],
         )
 
@@ -587,20 +597,23 @@ class TestRunLoad:
 
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         # CSV with source_id so the primary hostid→source_id lookup works
         header_with_id = (
             "cluster_id,source,source_id,name,name_clean,serial_number,"
-            "mac_address,mac_clean,asset_tag,manufacturer,model,os,"
-            "os_version,assigned_user,ip_address,imei,extra_attributes"
+            "mac_address,mac_clean,name_fallback,asset_tag,manufacturer,model,os,"
+            "os_version,assigned_user,ip_address,imei,"
+            "mdm_latitude,mdm_longitude,mdm_horizontal_accuracy,mdm_location_address,mdm_located_time,"
+            "extra_attributes,os_family"
         )
         self._create_clusters_csv(
             tmp_path,
             [
                 header_with_id,
-                "1,FG,fg1,ws28,ws28,SER001,aa:bb:cc:dd:ee:ff,aabbccddeeff,,Dell,Latitude,Windows,,jdoe,10.0.0.1,,",
-                "2,ZBX,101,srv-core,srv-core,SER002,,,,HP,ProLiant,Linux,,root,10.0.0.2,,",
+                "1,FG,fg1,ws28,ws28,SER001,aa:bb:cc:dd:ee:ff,aabbccddeeff,,,Dell,Latitude,Windows,,jdoe,10.0.0.1,,,,,,,,",
+                "2,ZBX,101,srv-core,srv-core,SER002,,,,,HP,ProLiant,Linux,,root,10.0.0.2,,,,,,,,",
             ],
         )
 
@@ -665,13 +678,13 @@ class TestRunLoad:
 
 
 class TestRunPipeline:
-    """run_pipeline() orchestrates all four stages in order.
+    """run_pipeline() orchestrates all six stages in order.
 
     Covers lines 219-233 of cli/pipeline.py.
     """
 
     def test_full_pipeline(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
-        """All four stages run in sequence when no skip flags are set."""
+        """All six stages run in sequence when no skip flags are set."""
         import zentinull.cli.pipeline as pipeline_mod
 
         stages: list[str] = []
@@ -683,11 +696,13 @@ class TestRunPipeline:
         monkeypatch.setattr(pipeline_mod, "run_export", lambda: stages.append("export") or 5)
         monkeypatch.setattr(pipeline_mod, "run_splink", lambda *a, **kw: stages.append("splink"))
         monkeypatch.setattr(pipeline_mod, "run_load", lambda: stages.append("load") or 3)
+        monkeypatch.setattr(pipeline_mod, "run_valentine_stage", lambda: stages.append("valentine") or 0)
+        monkeypatch.setattr(pipeline_mod, "run_attach", lambda: stages.append("attach") or 0)
 
         from zentinull.cli.pipeline import run_pipeline
 
         run_pipeline()
-        assert stages == ["ingest", "export", "splink", "load"]
+        assert stages == ["ingest", "export", "splink", "load", "valentine", "attach"]
 
     def test_skip_ingest(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
         """With skip_ingest=True, the ingest stage is skipped."""
@@ -698,11 +713,13 @@ class TestRunPipeline:
         monkeypatch.setattr(pipeline_mod, "run_export", lambda: stages.append("export") or 5)
         monkeypatch.setattr(pipeline_mod, "run_splink", lambda *a, **kw: stages.append("splink"))
         monkeypatch.setattr(pipeline_mod, "run_load", lambda: stages.append("load") or 3)
+        monkeypatch.setattr(pipeline_mod, "run_valentine_stage", lambda: stages.append("valentine") or 0)
+        monkeypatch.setattr(pipeline_mod, "run_attach", lambda: stages.append("attach") or 0)
 
         from zentinull.cli.pipeline import run_pipeline
 
         run_pipeline(skip_ingest=True)
-        assert stages == ["export", "splink", "load"]
+        assert stages == ["export", "splink", "load", "valentine", "attach"]
 
     def test_passes_sources_to_ingest(self, monkeypatch: pytest.MonkeyPatch, isolated_status: Any) -> None:
         """The sources and skip_sources parameters are forwarded to run_ingest."""
@@ -719,6 +736,8 @@ class TestRunPipeline:
         monkeypatch.setattr(pipeline_mod, "run_export", lambda: 0)
         monkeypatch.setattr(pipeline_mod, "run_splink", lambda *a, **kw: None)
         monkeypatch.setattr(pipeline_mod, "run_load", lambda: 0)
+        monkeypatch.setattr(pipeline_mod, "run_valentine_stage", lambda: 0)
+        monkeypatch.setattr(pipeline_mod, "run_attach", lambda: 0)
 
         from zentinull.cli.pipeline import run_pipeline
 
@@ -747,7 +766,8 @@ class TestExportSource:
 
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -795,8 +815,10 @@ class TestRunIncrementalLoad:
 
     CSV_HEADER = (
         "source,source_id,name,name_clean,serial_number,"
-        "mac_address,mac_clean,asset_tag,manufacturer,model,os,"
-        "os_version,assigned_user,ip_address,imei,extra_attributes"
+        "mac_address,mac_clean,name_fallback,asset_tag,manufacturer,model,os,"
+        "os_version,assigned_user,ip_address,imei,"
+        "mdm_latitude,mdm_longitude,mdm_horizontal_accuracy,mdm_location_address,mdm_located_time,"
+        "extra_attributes,os_family"
     )
 
     def _create_mesh(self, root: Path, records: list[str]) -> Path:
@@ -812,17 +834,18 @@ class TestRunIncrementalLoad:
             CREATE TABLE source_records (
                 cluster_id VARCHAR, source VARCHAR, source_id VARCHAR,
                 name VARCHAR, name_clean VARCHAR, serial_number VARCHAR,
-                mac_address VARCHAR, mac_clean VARCHAR, asset_tag VARCHAR,
-                manufacturer VARCHAR, model VARCHAR, os VARCHAR,
+                mac_address VARCHAR, mac_clean VARCHAR, name_fallback VARCHAR,
+                asset_tag VARCHAR, manufacturer VARCHAR, model VARCHAR, os VARCHAR,
                 os_version VARCHAR, assigned_user VARCHAR, ip_address VARCHAR,
-                imei VARCHAR, extra_attributes VARCHAR
+                imei VARCHAR, mdm_latitude VARCHAR, mdm_longitude VARCHAR,
+                mdm_horizontal_accuracy VARCHAR, mdm_location_address VARCHAR,
+                mdm_located_time VARCHAR, extra_attributes VARCHAR, os_family VARCHAR
             )
         """)
         for rec in records:
-            cols = "cluster_id,source,source_id,name,name_clean,serial_number,mac_address,mac_clean,asset_tag,manufacturer,model,os,os_version,assigned_user,ip_address,imei,extra_attributes"
-            placeholders = ",".join(["?"] * 17)
+            cols = "cluster_id," + self.CSV_HEADER
+            placeholders = ",".join(["?"] * 24)
             conn.execute(f"INSERT INTO source_records ({cols}) VALUES ({placeholders})", rec.split(","))
-        conn.execute("CREATE TABLE devices AS SELECT * FROM source_records LIMIT 0")
         conn.close()
         return mesh_path
 
@@ -844,13 +867,14 @@ class TestRunIncrementalLoad:
         """New records from CSV are inserted into source_records."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         self._create_mesh(tmp_path, [])
         self._create_source_csv(
             tmp_path,
             "fg",
-            ["fg,mac1,ws28,ws28,,aa:bb:cc:dd:ee:ff,,,,,,,10.0.0.1,,,vlan=100"],
+            ["fg,mac1,ws28,ws28,,aa:bb:cc:dd:ee:ff,,,,,,,,10.0.0.1,,,,,,,,vlan=100,"],
         )
 
         from zentinull.cli.pipeline import run_incremental_load
@@ -876,16 +900,17 @@ class TestRunIncrementalLoad:
         """Existing records (same source + source_id) are updated, not duplicated."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         self._create_mesh(
             tmp_path,
-            ["cluster1,fg,mac1,ws28,ws28,,aa:bb:cc:dd:ee:ff,,,,,,,10.0.0.1,,,"],
+            ["cluster1,fg,mac1,ws28,ws28,,aa:bb:cc:dd:ee:ff,,,,,,,,10.0.0.1,,,,,,,,,"],
         )
         self._create_source_csv(
             tmp_path,
             "fg",
-            ["fg,mac1,ws28-new,ws28-new,,aa:bb:cc:dd:ee:ff,,,,,,,,10.0.0.2,,,"],
+            ["fg,mac1,ws28-new,ws28-new,,aa:bb:cc:dd:ee:ff,,,,,,,,,10.0.0.2,,,,,,,,"],
         )
 
         from zentinull.cli.pipeline import run_incremental_load
@@ -904,13 +929,62 @@ class TestRunIncrementalLoad:
         finally:
             conn.close()
 
+    def test_collapses_duplicate_keys_preserving_splink_cluster(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any
+    ) -> None:
+        """Duplicate (source, source_id) rows collapse to one row keeping the Splink cluster_id.
+
+        Given a mesh polluted with duplicate keys from earlier runs (one
+        Splink-assigned cluster plus stray new-* clusters for the same device),
+        when an incremental load runs, then exactly one row remains per key,
+        the Splink cluster_id survives, and a repeat run stays idempotent.
+        """
+        import zentinull.cli.pipeline as pipeline_mod
+
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
+
+        empty_tail = "," * 18  # 19 empty fields: everything after name_clean
+        self._create_mesh(
+            tmp_path,
+            [
+                f"new-fg-aaaa1111,fg,mac1,ws28,ws28,{empty_tail}",
+                f"fg::04:7c:16,fg,mac1,ws28,ws28,{empty_tail}",
+                f"new-fg-bbbb2222,fg,mac1,ws28,ws28,{empty_tail}",
+            ],
+        )
+        self._create_source_csv(
+            tmp_path,
+            "fg",
+            ["fg,mac1,ws28,ws28,,aa:bb:cc:dd:ee:ff,,,,,,,,,10.0.0.9,,,,,,,,"],
+        )
+
+        from zentinull.cli.pipeline import run_incremental_load
+
+        run_incremental_load(["fg"])
+        run_incremental_load(["fg"])  # repeat run must not re-duplicate
+
+        import duckdb
+
+        conn = duckdb.connect(str(tmp_path / "data" / "mesh.duckdb"), read_only=True)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM source_records").fetchone()
+            assert count[0] == 1
+            row = conn.execute("SELECT cluster_id, name, ip_address FROM source_records").fetchone()
+            assert row[0] == "fg::04:7c:16"
+            assert row[1] == "ws28"
+            assert row[2] == "10.0.0.9"
+        finally:
+            conn.close()
+
     def test_returns_zero_when_mesh_missing(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_status: Any
     ) -> None:
         """When mesh.duckdb doesn't exist, returns 0 without error."""
         import zentinull.cli.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod, "PATHS", _make_paths(tmp_path))
+        paths = _make_paths(tmp_path)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         from zentinull.cli.pipeline import run_incremental_load
 
@@ -961,7 +1035,7 @@ class TestRunIncrementalSync:
         paths = _make_paths(tmp_path)
         paths.mesh_path.parent.mkdir(parents=True, exist_ok=True)
         paths.mesh_path.touch()
-        monkeypatch.setattr(pipeline_mod, "PATHS", paths)
+        monkeypatch.setattr(pipeline_mod, "get_paths", lambda: paths)
 
         from zentinull.cli.pipeline import run_incremental_sync
 
@@ -1007,8 +1081,8 @@ class TestRunIncrementalSync:
         import zentinull.ingestors.base as base_mod
 
         paths = _paths_from_data_dir(temp_data_dir)
-        monkeypatch.setattr(config_mod, "PATHS", paths)
-        monkeypatch.setattr(base_mod, "PATHS", paths)
+        monkeypatch.setattr(config_mod, "get_paths", lambda: paths)
+        monkeypatch.setattr(base_mod, "get_paths", lambda: paths)
 
         # First run — inserts rows
         first_results = runner.run_system("zbx", manifest, incremental=True)

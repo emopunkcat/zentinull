@@ -101,25 +101,8 @@ class TestCreateMeshTables:
         _write_csv(
             csv_path,
             [
-                [
-                    "cluster_id",
-                    "source",
-                    "source_id",
-                    "name",
-                    "name_clean",
-                    "serial_number",
-                    "mac_address",
-                    "mac_clean",
-                    "asset_tag",
-                    "manufacturer",
-                    "model",
-                    "os",
-                    "os_version",
-                    "assigned_user",
-                    "ip_address",
-                    "imei",
-                ],
-                ["c3", "me", "res-1", "", "", "SN003", "", "", "", "", "", "", "", "", "", ""],
+                SPLINK_HEADERS,
+                ["c3", "me", "res-1", "", "", "SN003"] + [""] * 18,
             ],
         )
         conn = duckdb.connect()
@@ -174,10 +157,17 @@ class TestCreateMeshTables:
                     "",
                     "",
                     "",
+                    "",
                     "490154203237518",
                     "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
                 ],
-                ["2", "fg", "43", "", "", "87654321", "", "", "", "", "", "", "", "", "", "", ""],
+                ["2", "fg", "43", "", "", "87654321"] + [""] * 18,
             ],
         )
         conn = duckdb.connect()
@@ -200,30 +190,32 @@ class TestSqlConstants:
         """SOURCE_RECORDS_SQL is syntactically valid in DuckDB."""
         from zentinull.api.schema import SOURCE_RECORDS_SQL
 
-        conn = duckdb.connect()
         # Parse-only verification: can be described (won't execute without param)
         # We check it's a non-empty string containing expected keywords
         assert "CREATE OR REPLACE TABLE" in SOURCE_RECORDS_SQL
         assert "read_csv_auto" in SOURCE_RECORDS_SQL
-        conn.close()
 
     def test_devices_sql_parses(self) -> None:
-        """DEVICES_SQL is valid DuckDB SQL — creates source_records first then runs the DDL."""
-        from zentinull.api.schema import DEVICES_SQL
+        """build_devices_sql generates valid DuckDB SQL."""
+        from zentinull.api.schema import build_devices_sql
+        from zentinull.manifest import load_manifest
+
+        profile = load_manifest().profiles["device"]
+        devices_sql = build_devices_sql(profile)
 
         conn = duckdb.connect()
+        # Create source_records with all profile fields
+        fields = list(profile.fields)
+        cols_ddl = ", ".join(f"{f} VARCHAR" for f in fields)
+        conn.execute(f"CREATE TABLE source_records (cluster_id VARCHAR, {cols_ddl})")
         conn.execute("""
-            CREATE TABLE source_records AS SELECT * FROM (VALUES
-                ('c1', 'sp', 'sp-1', 'server-01', 'server-01', 'SN001', 'aa:bb:cc:dd:ee:ff', 'aabbccddeeff',
-                 '', 'Dell', 'PowerEdge', 'Windows', '2022', '', '10.0.0.1', '')
-            ) t(cluster_id, source, source_id, name, name_clean, serial_number,
-                mac_address, mac_clean, asset_tag, manufacturer, model, os, os_version,
-                assigned_user, ip_address, imei)
+            INSERT INTO source_records (cluster_id, source, source_id, name, name_clean)
+            VALUES ('c1', 'sp', 'sp-1', 'server-01', 'server-01')
         """)
         try:
-            conn.execute(f"EXPLAIN {DEVICES_SQL}")
+            conn.execute(f"EXPLAIN {devices_sql}")
         except duckdb.Error as e:
-            pytest.fail(f"DEVICES_SQL parse error: {e}")
+            pytest.fail(f"build_devices_sql parse error: {e}")
         finally:
             conn.close()
 
@@ -249,18 +241,27 @@ class TestSqlConstants:
 
     def test_indexes_sql_creates_indexes(self) -> None:
         """INDEXES_SQL creates indexes after tables exist."""
-        from zentinull.api.schema import ATTACHMENTS_SQL, DEVICES_SQL, EVENTS_SQL, INDEXES_SQL, METRICS_SQL
+        from zentinull.api.schema import (
+            ATTACHMENTS_SQL,
+            EVENTS_SQL,
+            INDEXES_SQL,
+            METRICS_SQL,
+            build_devices_sql,
+        )
+        from zentinull.manifest import load_manifest
+
+        profile = load_manifest().profiles["device"]
+        devices_sql = build_devices_sql(profile)
 
         conn = duckdb.connect()
-        conn.execute(
-            """CREATE TABLE source_records AS SELECT * FROM (VALUES
-                ('c1', 'sp', 'sp-1', 'server-01', 'server-01', 'SN001', 'aa:bb:cc:dd:ee:ff', 'aabbccddeeff',
-                 '', 'Dell', 'PowerEdge', 'Windows', '2022', '', '10.0.0.1', '')
-            ) t(cluster_id, source, source_id, name, name_clean, serial_number,
-                mac_address, mac_clean, asset_tag, manufacturer, model, os, os_version,
-                assigned_user, ip_address, imei)"""
-        )
-        conn.execute(DEVICES_SQL)
+        fields = list(profile.fields)
+        cols_ddl = ", ".join(f"{f} VARCHAR" for f in fields)
+        conn.execute(f"CREATE TABLE source_records (cluster_id VARCHAR, {cols_ddl})")
+        conn.execute("""
+            INSERT INTO source_records (cluster_id, source, source_id, name, name_clean)
+            VALUES ('c1', 'sp', 'sp-1', 'server-01', 'server-01')
+        """)
+        conn.execute(devices_sql)
         conn.execute(METRICS_SQL)
         conn.execute(EVENTS_SQL)
         conn.execute(ATTACHMENTS_SQL)
@@ -268,7 +269,6 @@ class TestSqlConstants:
         indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
         assert "idx_devices_name" in indexes
         assert "idx_devices_serial" in indexes
-        conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -284,6 +284,7 @@ SPLINK_HEADERS = [
     "serial_number",
     "mac_address",
     "mac_clean",
+    "name_fallback",
     "asset_tag",
     "manufacturer",
     "model",
@@ -292,7 +293,13 @@ SPLINK_HEADERS = [
     "assigned_user",
     "ip_address",
     "imei",
+    "mdm_latitude",
+    "mdm_longitude",
+    "mdm_horizontal_accuracy",
+    "mdm_location_address",
+    "mdm_located_time",
     "extra_attributes",
+    "os_family",
 ]
 
 
@@ -322,15 +329,15 @@ def _write_sample_csv(tmp_path: Path) -> Path:
                 "aa:bb:cc:dd:ee:01",
                 "aabbccddee01",
                 "",
+                "",
                 "Dell",
                 "PowerEdge",
                 "Windows Server",
                 "2022",
                 "",
                 "10.0.0.1",
-                "",
-                "",
-            ],
+            ]
+            + [""] * 8,
             # c1 — server-01 from zbx (row 2) — same cluster, different source
             [
                 "c1",
@@ -342,15 +349,15 @@ def _write_sample_csv(tmp_path: Path) -> Path:
                 "aa:bb:cc:dd:ee:01",
                 "aabbccddee01",
                 "",
+                "",
                 "Dell",
                 "PowerEdge",
                 "Linux",
                 "Ubuntu 22.04",
                 "",
                 "10.0.0.1",
-                "",
-                "",
-            ],
+            ]
+            + [""] * 8,
             # c2 — laptop-01 from me (row 3)
             [
                 "c2",
@@ -362,14 +369,14 @@ def _write_sample_csv(tmp_path: Path) -> Path:
                 "aa:bb:cc:dd:ee:02",
                 "aabbccddee02",
                 "",
+                "",
                 "Lenovo",
                 "ThinkPad",
                 "Windows 11",
                 "24H2",
                 "jdoe",
                 "10.0.0.2",
-                "",
-                "",
-            ],
+            ]
+            + [""] * 8,
         ],
     )

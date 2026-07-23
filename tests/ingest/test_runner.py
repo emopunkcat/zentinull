@@ -11,6 +11,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from zentinull.ingest.runner import run_system
 from zentinull.ingest.strategies import REGISTRY
 from zentinull.manifest.types import Auth, Feed, Manifest, Role, System
@@ -24,7 +26,7 @@ def _sha256_of_canonical_json(data: dict) -> str:
 class TestRunnerRawStore:
     """Tests for the raw-store write path through the runner."""
 
-    def test_run_system_creates_table_and_inserts_rows(self, tmp_path: Path) -> None:
+    def test_run_system_creates_table_and_inserts_rows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Given a manifest with a system and a feed, a fake strategy registered,
         and DATA_DIR pointing to tmp_path, when run_system is called,
         then the raw-store table is created with the §4 schema, a unique index
@@ -66,8 +68,7 @@ class TestRunnerRawStore:
             import zentinull.ingestors.base as base_mod
             from zentinull.config import ProjectPaths as _TestPaths
 
-            _orig_paths = base_mod.PATHS
-            base_mod.PATHS = _TestPaths(
+            _test_paths_obj = _TestPaths(
                 project="test",
                 data_dir=tmp_path,
                 export_dir=tmp_path / "export",
@@ -78,11 +79,9 @@ class TestRunnerRawStore:
                 splink_output_dir=tmp_path / "export" / "splink_output",
                 benchmarks_dir=tmp_path / ".benchmarks",
             )
+            monkeypatch.setattr(base_mod, "get_paths", lambda: _test_paths_obj)
 
-            try:
-                result = run_system("sys1", manifest, feed_keys=["sys1_feed1"])
-            finally:
-                base_mod.PATHS = _orig_paths
+            result = run_system("sys1", manifest, feed_keys=["sys1_feed1"])
 
             assert result == {"sys1_feed1": 2}
 
@@ -132,7 +131,9 @@ class TestRunnerRawStore:
         finally:
             REGISTRY.pop(fake_strategy_name, None)
 
-    def test_empty_fetch_leaves_pre_existing_table_untouched(self, tmp_path: Path) -> None:
+    def test_empty_fetch_leaves_pre_existing_table_untouched(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """Given a pre-existing raw-store table with existing data and a fake
         strategy that returns an empty list, when run_system is called,
         then the existing table is left intact (same schema, original rows preserved).
@@ -150,8 +151,7 @@ class TestRunnerRawStore:
             import zentinull.ingestors.base as base_mod
             from zentinull.config import ProjectPaths as _TestPaths
 
-            _orig_paths = base_mod.PATHS
-            base_mod.PATHS = _TestPaths(
+            _test_paths_obj = _TestPaths(
                 project="test",
                 data_dir=tmp_path,
                 export_dir=tmp_path / "export",
@@ -162,6 +162,7 @@ class TestRunnerRawStore:
                 splink_output_dir=tmp_path / "export" / "splink_output",
                 benchmarks_dir=tmp_path / ".benchmarks",
             )
+            monkeypatch.setattr(base_mod, "get_paths", lambda: _test_paths_obj)
 
             try:
                 conn = sqlite3.connect(str(tmp_path / "sys1.sqlite"))
@@ -224,6 +225,6 @@ class TestRunnerRawStore:
                 finally:
                     conn2.close()
             finally:
-                base_mod.PATHS = _orig_paths
+                pass
         finally:
             REGISTRY.pop(fake_strategy_name, None)

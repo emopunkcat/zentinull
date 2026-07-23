@@ -2,8 +2,9 @@
 
 This manifest defines the Zentinull device entity resolution pipeline:
 - 8 ANCHOR feeds (device records from each source)
-- 2 ATTACHMENT feeds (zbx items, sdp requests)
-- 13 CONTEXT feeds (supplementary data)
+- 6 ATTACHMENT feeds (zbx items, sdp requests, sp_employees, sp_accountinfo,
+  sp_devicenotes, sp_componentpurchases)
+- 9 CONTEXT feeds (supplementary data)
 - 1 ResolutionProfile (device) with Splink config
 """
 
@@ -41,7 +42,7 @@ SYSTEMS = {
     ),
     "me": System(
         auth=Auth(kind="oauth_refresh", options={"client_id": "ME_CLIENT_ID", "client_secret": "ME_CLIENT_SECRET"}),
-        strategy="paged_json",
+        strategy="paged_json_detail",
         label="ManageEngine",
         schedule=7200,  # 2h
         coverage=0.50,
@@ -69,7 +70,7 @@ SYSTEMS = {
         label="Active Directory",
         schedule=21600,  # 6h
         coverage=0.60,
-        fields=("name", "serial", "os", "user", "ip", "mac"),
+        fields=("name", "serial", "os", "user"),
     ),
     "sdp": System(
         auth=Auth(kind="oauth_refresh", options={"client_id": "SDP_CLIENT_ID", "client_secret": "SDP_CLIENT_SECRET"}),
@@ -93,6 +94,7 @@ DEVICE_PROFILE = ResolutionProfile(
         "serial_number",
         "mac_address",
         "mac_clean",
+        "name_fallback",
         "asset_tag",
         "manufacturer",
         "model",
@@ -101,28 +103,51 @@ DEVICE_PROFILE = ResolutionProfile(
         "assigned_user",
         "ip_address",
         "imei",
+        "mdm_latitude",
+        "mdm_longitude",
+        "mdm_horizontal_accuracy",
+        "mdm_location_address",
+        "mdm_located_time",
         "extra_attributes",
+        "os_family",
     ),
     derived={
         "name_clean": ("name", "name"),
         "mac_clean": ("mac_address", "mac"),
+        "name_fallback": ("name", "name_fallback"),
+        "os_family": ("os", "os_family"),
     },
     comparisons=(
         Comparison(kind="levenshtein", column="serial_number", thresholds=(1.0, 2.0)),
         Comparison(kind="levenshtein", column="mac_clean", thresholds=(1.0, 2.0)),
         Comparison(kind="exact", column="name_clean"),
+        Comparison(kind="exact", column="ip_address", term_frequency_adjustments=True),
         Comparison(kind="exact", column="manufacturer", term_frequency_adjustments=True),
         Comparison(kind="exact", column="assigned_user", term_frequency_adjustments=True),
-        Comparison(kind="exact", column="os", term_frequency_adjustments=True),
+        Comparison(kind="exact", column="os_family", term_frequency_adjustments=True),
     ),
-    blocking=("serial_number", "mac_clean"),
-    deterministic=("serial_number", "mac_clean"),
-    em_passes=("serial_number", "mac_clean"),
+    blocking=("serial_number", "mac_clean", "name_clean", "name_fallback"),
+    deterministic=("serial_number", "mac_clean", "name_clean", "name_fallback"),
+    em_passes=("serial_number", "mac_clean", "name_clean", "name_fallback"),
     predict_threshold=SPLINK_PREDICT_THRESHOLD,
     cluster_threshold=float(SPLINK_THRESHOLD),
     sweep_thresholds=tuple(float(t) for t in SPLINK_SWEEP_THRESHOLDS),
     u_max_pairs=SPLINK_U_MAX_PAIRS,
     lambda_recall=SPLINK_LAMBDA_RECALL,
+    sot={
+        "name": ("sp", ""),
+        "serial_number": ("me", "sp"),
+        "mac_address": ("fg", "me"),
+        "ip_address": ("zbx", "fg"),
+        "manufacturer": ("me", "sp"),
+        "model": ("me", "sp"),
+        "os": ("me", "sp"),
+        "os_family": ("me", "sp"),
+        "os_version": ("me", "sdp"),
+        "assigned_user": ("sp", "me"),
+        "imei": ("sdp", "me"),
+        "asset_tag": ("sp", "sdp"),
+    },
 )
 
 PROFILES = {"device": DEVICE_PROFILE}
@@ -157,6 +182,9 @@ FEEDS = {
             "path": "/inventory/scancomputers",
             "response_path": "message_response.scancomputers",
             "pagination": "page_param",
+            "detail_url_template": "{base}/inventory/details?resource_id={id}",
+            "detail_id_field": "resource_id",
+            "detail_delay": 0.15,
         },
         role=Role.ANCHOR,
         profile="device",
@@ -177,7 +205,23 @@ FEEDS = {
     ),
     "me_mdm": Feed(
         system="me",
-        endpoint={"base": "ME_MDM_BASE_URL", "path": "/devices", "pagination": "paging.next"},
+        endpoint={
+            "base": "ME_MDM_BASE_URL",
+            "path": "/devices",
+            "pagination": "paging.next",
+            "detail_url_template": "{base}/devices/{id}",
+            "detail_id_field": "device_id",
+            "detail_delay": 0.3,
+            "secondary_detail_url_template": "{base}/devices/{id}/locations",
+            "secondary_response_key": "locations",
+            "secondary_fields": {
+                "mdm_latitude": "latitude",
+                "mdm_longitude": "longitude",
+                "mdm_horizontal_accuracy": "horizontal_accuracy",
+                "mdm_location_address": "address",
+                "mdm_located_time": "added_time",
+            },
+        },
         role=Role.ANCHOR,
         profile="device",
         store="mdm_devices",
@@ -194,6 +238,11 @@ FEEDS = {
             "os_version": ("os_version", "OSVERSION"),
             "assigned_user": ("user.user_email", "USEREMAIL", "user_email"),
             "imei": FieldSpec(paths=("imei",), transform="first_of_list"),
+            "mdm_latitude": ("mdm_latitude", "latitude"),
+            "mdm_longitude": ("mdm_longitude", "longitude"),
+            "mdm_horizontal_accuracy": ("mdm_horizontal_accuracy", "horizontal_accuracy"),
+            "mdm_location_address": ("mdm_location_address", "address"),
+            "mdm_located_time": ("mdm_located_time", "added_time"),
         },
     ),
     "fg_clients": Feed(
@@ -235,7 +284,7 @@ FEEDS = {
             "base": "ZBX_URL",
             "method": "host.get",
             "params": {
-                "output": ["hostid", "host", "name", "status"],
+                "output": ["hostid", "host", "name", "status", "description"],
                 "selectGroups": ["name"],
                 "selectInventory": [
                     "os",
@@ -262,9 +311,18 @@ FEEDS = {
             "source_id": ("hostid",),
             "name": FieldSpec(paths=("host", "name")),
             "ip_address": ("interfaces.0.ip", "ip"),
-            "os": ("inventory.os",),
-            "serial_number": ("inventory.serial",),
-            "mac_address": ("inventory.mac",),
+            "os": ("inventory.os", "inventory.os_full"),
+            "os_version": ("inventory.os_short",),
+            "serial_number": FieldSpec(
+                paths=("inventory.serial_no_a", "inventory.serial_no_b"),
+                transform="serial",
+            ),
+            "mac_address": FieldSpec(
+                paths=("inventory.macaddress_a", "inventory.macaddress_b"),
+                transform="mac",
+            ),
+            "model": ("inventory.type", "inventory.type_full"),
+            "asset_tag": ("inventory.tag",),
         },
     ),
     "ad_computers": Feed(
@@ -285,6 +343,7 @@ FEEDS = {
                 "location",
                 "userAccountControl",
                 "managedBy",
+                "serialNumber",
             ],
             "size_limit": 5000,
         },
@@ -295,6 +354,7 @@ FEEDS = {
         spec={
             "source_id": ("sAMAccountName", "dNSHostName"),
             "name": ("dNSHostName",),
+            "serial_number": FieldSpec(paths=("serialNumber",), transform="serial"),
             "manufacturer": ("manufacturer",),
             "model": ("model",),
             "os": ("operatingSystem",),
@@ -309,6 +369,11 @@ FEEDS = {
             "path": "/api/v3/assets",
             "response_path": "assets",
             "pagination": {"row_count": 100, "sort_field": "id", "sort_order": "asc"},
+            "field_names": [
+                "id", "name", "product", "manufacturer", "model",
+                "serial_number", "mac_address", "asset_tag", "os",
+                "assigned_user", "imei", "barcode", "location",
+            ],
         },
         role=Role.ANCHOR,
         profile="device",
@@ -317,8 +382,12 @@ FEEDS = {
         spec={
             "source_id": ("id",),
             "name": ("name",),
+            "serial_number": FieldSpec(paths=("serial_number",), transform="serial"),
+            "mac_address": ("mac_address",),
+            "asset_tag": ("barcode", "asset_tag"),
             "manufacturer": ("product.manufacturer", "manufacturer"),
             "model": ("product.name", "model"),
+            "os": ("os",),
             "assigned_user": ("created_by.name", "assigned_user"),
         },
     ),
@@ -369,40 +438,125 @@ FEEDS = {
             "status": ("status.name",),
         },
     ),
-    # CONTEXT feeds (13) — stored but not resolved
+    # ATTACHMENT feeds (6) — linked to device clusters after resolution
     "sp_employees": Feed(
         system="sp",
         endpoint={"base": "SHAREPOINT_BASE_URL", "path": "/sp_employees"},
-        role=Role.CONTEXT,
+        role=Role.ATTACHMENT,
         store="sp_employees",
         id_path="id",
+        links=(
+            Link(
+                field="fields.BusEmailAddress",
+                to="device",
+                on="assigned_user",
+                strategy="exact",
+                scope=("sp_devices", "me_ec", "me_mdm", "fg_clients", "ad_computers"),
+            ),
+            Link(
+                field="fields.ReadName",
+                to="device",
+                on="assigned_user",
+                strategy="exact",
+                scope=("sp_devices", "me_ec", "me_mdm", "fg_clients", "ad_computers"),
+            ),
+            Link(
+                field="fields.MLUsername",
+                to="device",
+                on="assigned_user",
+                strategy="exact",
+                scope=("sp_devices", "me_ec", "me_mdm", "fg_clients", "ad_computers"),
+            ),
+        ),
     ),
     "sp_accountinfo": Feed(
         system="sp",
         endpoint={"base": "SHAREPOINT_BASE_URL", "path": "/sp_AccountInfo"},
-        role=Role.CONTEXT,
+        role=Role.ATTACHMENT,
         store="sp_AccountInfo",
         id_path="id",
+        links=(
+            Link(
+                field="fields.DeviceString",
+                to="device",
+                on="name_clean",
+                strategy="exact",
+                scope=("sp_devices",),
+            ),
+            Link(
+                field="fields.EmployeeString",
+                to="device",
+                on="assigned_user",
+                strategy="exact",
+                scope=("sp_devices", "me_ec", "me_mdm", "fg_clients", "ad_computers"),
+            ),
+        ),
     ),
     "sp_devicenotes": Feed(
         system="sp",
         endpoint={"base": "SHAREPOINT_BASE_URL", "path": "/sp_devicenotes"},
-        role=Role.CONTEXT,
+        role=Role.ATTACHMENT,
         store="sp_devicenotes",
         id_path="id",
+        links=(
+            Link(
+                field="fields.LookupToDevicesLookupId",
+                to="device",
+                on="source_id",
+                strategy="exact",
+                scope=("sp_devices",),
+            ),
+        ),
     ),
+    "sp_employeedocs": Feed(
+        system="sp",
+        # n8n webhook at /webhook/sp_employeedocs — returns a flat JSON array
+        # of SharePoint agreement file records. Same host as the rest of the
+        # SP feeds so we reuse N8N_BASE_URL.
+        endpoint={"base": "N8N_BASE_URL", "path": "/sp_employeedocs"},
+        role=Role.ATTACHMENT,
+        store="sp_employeedocs",
+        id_path="fields.ID",
+        links=(
+            # Employee name lives in the URL path, e.g.
+            # /Agreements/Rick%20Ahmed__10/foo.pdf → "Rick Ahmed".
+            # The transform decodes + extracts; the result is looked up
+            # against `assigned_user` in the keyspace — same value SP devices
+            # and other anchors already use, so docs link to the same
+            # clusters the employee already attaches to.
+            Link(
+                field="webUrl",
+                to="device",
+                on="assigned_user",
+                strategy="normalized",
+                transform="employee_name_from_url",
+                multi=True,
+                scope=("sp_devices", "me_ec", "me_mdm", "fg_clients", "ad_computers"),
+            ),
+        ),
+    ),
+    "sp_componentpurchases": Feed(
+        system="sp",
+        endpoint={"base": "SHAREPOINT_BASE_URL", "path": "/sp_ComponentPurchases"},
+        role=Role.ATTACHMENT,
+        store="sp_ComponentPurchases",
+        id_path="id",
+        links=(
+            Link(
+                field="fields.LookupToDevicesLookupId",
+                to="device",
+                on="source_id",
+                strategy="exact",
+                scope=("sp_devices",),
+            ),
+        ),
+    ),
+    # CONTEXT feeds (9) — stored but not resolved
     "sp_vlans": Feed(
         system="sp",
         endpoint={"base": "SHAREPOINT_BASE_URL", "path": "/sp_vlans"},
         role=Role.CONTEXT,
         store="sp_vlans",
-        id_path="id",
-    ),
-    "sp_componentpurchases": Feed(
-        system="sp",
-        endpoint={"base": "SHAREPOINT_BASE_URL", "path": "/sp_ComponentPurchases"},
-        role=Role.CONTEXT,
-        store="sp_ComponentPurchases",
         id_path="id",
     ),
     "sdp_contracts": Feed(
